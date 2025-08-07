@@ -1,0 +1,93 @@
+[package]
+name = "gterminal-rust-extensions"
+version = "0.1.0"
+edition = "2021"
+authors = ["GTerminal Team"]
+description = "High-performance Rust extensions for GTerminal ReAct engine"
+
+[lib]
+name = "gterminal_rust_extensions"
+crate-type = ["cdylib"]
+
+[dependencies]
+# PyO3 bindings for Python integration
+pyo3 = { version = "0.20", features = ["extension-module", "abi3-py38", "chrono"] }
+
+# Async runtime
+tokio = { version = "1.35", features = [
+    "full",
+    "macros",
+    "rt-multi-thread",
+    "io-util",
+    "fs",
+    "process",
+    "signal",
+    "time",
+    "sync",
+    "parking_lot"
+] }
+
+# Concurrent data structures
+dashmap = "5.5"
+parking_lot = "0.12"
+
+# JSON processing
+serde = { version = "1.0", features = ["derive"] }
+serde_json = { version = "1.0", features = ["preserve_order"] }
+simd-json = "0.13"
+
+# File operations and watching
+notify = "6.1"
+walkdir = "2.4"
+glob = "0.3"
+memmap2 = "0.9"
+
+# Process management
+nix = "0.27"
+libc = "0.2"
+
+# Error handling and utilities
+anyhow = "1.0"
+thiserror = "1.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Time and cache management
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1.6", features = ["v4", "serde"] }
+
+# Schema validation
+jsonschema = "0.17"
+
+# Path utilities
+pathdiff = "0.2"
+
+# String utilities
+regex = "1.10"
+
+# Compression for cache snapshots
+flate2 = "1.0"
+
+# Async channels
+async-channel = "2.1"
+
+[dependencies.pyo3-asyncio]
+version = "0.20"
+features = ["tokio-runtime"]
+
+[build-dependencies]
+pyo3-build-config = "0.20"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+
+[profile.dev]
+opt-level = 1
+
+# Enable SIMD optimizations on x86_64
+[target.'cfg(target_arch = "x86_64")'.dependencies]
+target-features = "+sse2,+sse3,+ssse3,+sse4.1,+sse4.2,+avx,+avx2"

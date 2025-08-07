@@ -73,7 +73,7 @@ addopts = [
     "--cov-fail-under=80",
 ]
 testpaths = ["tests"]
-asyncio_mode = "auto"
+markers = ["asyncio"]
 
 [tool.coverage.run]
 source = ["gemini_cli"]
@@ -130,3 +130,9 @@ module = [
     "google.auth.*",
 ]
 ignore_missing_imports = true
+
+[dependency-groups]
+dev = [
+    "pytest-asyncio>=1.1.0",
+    "pytest-cov>=6.2.1",
+]

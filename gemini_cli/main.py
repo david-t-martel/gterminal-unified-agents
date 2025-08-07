@@ -2,11 +2,12 @@
 """Main CLI interface for Gemini CLI tool."""
 
 import asyncio
-import click
 from pathlib import Path
 
-from .terminal.ui import GeminiTerminal
+import click
+
 from .core.client import GeminiClient
+from .terminal.ui import GeminiTerminal
 
 
 @click.group()
@@ -16,12 +17,15 @@ def cli(debug: bool) -> None:
     """Standalone Gemini CLI tool with rich terminal interface."""
     if debug:
         import logging
+
         logging.basicConfig(level=logging.DEBUG)
 
 
 @cli.command()
 @click.argument("prompt", required=False)
-@click.option("--interactive", "-i", is_flag=True, help="Start interactive terminal mode")
+@click.option(
+    "--interactive", "-i", is_flag=True, help="Start interactive terminal mode"
+)
 def analyze(prompt: str | None, interactive: bool) -> None:
     """Analyze code or start interactive session."""
     if interactive or not prompt:
@@ -40,7 +44,7 @@ def analyze(prompt: str | None, interactive: bool) -> None:
 def workspace(path: Path) -> None:
     """Analyze workspace/project structure."""
     from .tools.filesystem import FilesystemTool
-    
+
     fs_tool = FilesystemTool()
     analysis = asyncio.run(fs_tool.analyze_workspace(path))
     click.echo(analysis)

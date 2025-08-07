@@ -1,0 +1,23 @@
+2025-08-07 14:59:01,513 - __main__ - INFO - 🎯 STARTING GTERMINAL REACT BACKGROUND SERVER
+2025-08-07 14:59:01,513 - __main__ - INFO - ============================================================
+2025-08-07 14:59:01,521 - __main__ - INFO - 🚀 GTerminal ReAct Server initialized - Session: gterminal_20250807_145901
+2025-08-07 14:59:01,521 - __main__ - INFO - 🚀 Starting GTerminal ReAct Server on port 8765
+2025-08-07 14:59:01,581 - __main__ - INFO - 🔄 Background worker started
+2025-08-07 14:59:01,582 - __main__ - INFO - ✅ HTTP API server started on http://localhost:8765
+2025-08-07 14:59:01,582 - __main__ - INFO - 📍 Endpoints:
+2025-08-07 14:59:01,582 - __main__ - INFO -    POST /process - Process request immediately
+2025-08-07 14:59:01,583 - __main__ - INFO -    POST /queue   - Queue request for background processing
+2025-08-07 14:59:01,583 - __main__ - INFO -    GET  /result/{id} - Get result by request ID
+2025-08-07 14:59:01,583 - __main__ - INFO -    GET  /status  - Server status and metrics
+2025-08-07 14:59:05,111 - aiohttp.access - INFO - 127.0.0.1 [07/Aug/2025:13:59:05 -0500] "GET /status HTTP/1.1" 200 329 "-" "curl/8.5.0"
+2025-08-07 14:59:11,011 - __main__ - INFO - 🔄 Processing request doc_analysis_001: Analyze the current state of the py-gemini framework and provide recommendations for completing the ...
+2025-08-07 14:59:11,014 - gemini_cli.core.client - INFO - ✅ Authenticated with model: gemini-2.0-flash-exp
+2025-08-07 14:59:14,940 - gemini_cli.core.react_engine - INFO - Plan created with 6 actions
+2025-08-07 14:59:18,544 - __main__ - INFO - ✅ Completed request doc_analysis_001
+2025-08-07 14:59:18,548 - aiohttp.access - INFO - 127.0.0.1 [07/Aug/2025:13:59:11 -0500] "POST /process HTTP/1.1" 200 4143 "-" "curl/8.5.0"
+2025-08-07 14:59:23,994 - __main__ - INFO - 📝 Queued background task: task_2025-08-07T14:59:23.994322
+2025-08-07 14:59:23,994 - aiohttp.access - INFO - 127.0.0.1 [07/Aug/2025:13:59:23 -0500] "POST /queue HTTP/1.1" 200 270 "-" "curl/8.5.0"
+2025-08-07 14:59:23,995 - __main__ - INFO - 🔄 Processing request task_2025-08-07T14:59:23.994322: Complete the GAPP-GTERMINAL merger by analyzing /home/david/agents/unified-gapp-gterminal/ and imple...
+2025-08-07 14:59:26,192 - gemini_cli.core.react_engine - INFO - Plan created with 1 actions
+2025-08-07 14:59:28,487 - __main__ - INFO - ✅ Completed request task_2025-08-07T14:59:23.994322
+2025-08-07 14:59:28,487 - __main__ - INFO - Background task completed: task_2025-08-07T14:59:23.994322

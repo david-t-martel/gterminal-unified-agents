@@ -2,6 +2,7 @@
 """Entry point for the Gemini CLI tool."""
 
 import sys
+
 from .main import main
 
 if __name__ == "__main__":
