@@ -75,9 +75,7 @@ class GeminiTerminal:
             "structure",
         ]
 
-        return merge_completers(
-            [WordCompleter(commands, ignore_case=True), PathCompleter()]
-        )
+        return merge_completers([WordCompleter(commands, ignore_case=True), PathCompleter()])
 
     def _create_style(self) -> Style:
         """Create terminal styling."""
@@ -120,9 +118,7 @@ class GeminiTerminal:
                     await self._process_request(user_input.strip())
 
                 except KeyboardInterrupt:
-                    self.console.print(
-                        "\\n[yellow]Use 'exit' or 'quit' to leave[/yellow]"
-                    )
+                    self.console.print("\\n[yellow]Use 'exit' or 'quit' to leave[/yellow]")
                     continue
                 except EOFError:
                     break
@@ -272,7 +268,7 @@ complex requests into actions using available tools.
 **Session:** Active
 
 **Tool List:**
-{chr(10).join(f'- {name}: {desc}' for name, desc in tools.items())}
+{chr(10).join(f"- {name}: {desc}" for name, desc in tools.items())}
         """
 
         panel = Panel(
@@ -316,7 +312,7 @@ complex requests into actions using available tools.
             console=self.console,
             transient=True,
         ) as progress:
-            task = progress.add_task("Processing request...", total=None)
+            progress.add_task("Processing request...", total=None)
 
             try:
                 # Process with ReAct engine
@@ -341,10 +337,7 @@ complex requests into actions using available tools.
             response: The response text
         """
         # Try to detect if response contains code
-        if any(
-            marker in response
-            for marker in ["```", "def ", "class ", "function ", "import "]
-        ):
+        if any(marker in response for marker in ["```", "def ", "class ", "function ", "import "]):
             # Show as syntax-highlighted panel
             try:
                 panel = Panel(
@@ -377,7 +370,7 @@ complex requests into actions using available tools.
         """
         steps_text = "\\n".join(
             [
-                f"**{i+1}.** {step['type'].title()}: {step['description']} "
+                f"**{i + 1}.** {step['type'].title()}: {step['description']} "
                 f"({'✅' if step['success'] else '❌'})"
                 for i, step in enumerate(summary["steps"])
             ]

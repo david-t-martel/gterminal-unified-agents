@@ -121,9 +121,7 @@ class FilesystemTool(Tool):
         except Exception as e:
             return {"error": f"Failed to write file: {e}"}
 
-    async def _list_files(
-        self, path: str, pattern: str | None = None
-    ) -> dict[str, Any]:
+    async def _list_files(self, path: str, pattern: str | None = None) -> dict[str, Any]:
         """List files using fd.
 
         Args:
@@ -148,9 +146,7 @@ class FilesystemTool(Tool):
             if proc.returncode != 0:
                 return {"error": f"fd failed: {stderr.decode()}"}
 
-            files = [
-                line.strip() for line in stdout.decode().splitlines() if line.strip()
-            ]
+            files = [line.strip() for line in stdout.decode().splitlines() if line.strip()]
 
             return {
                 "path": path,
@@ -206,12 +202,8 @@ class FilesystemTool(Tool):
                                 {
                                     "file": match_data["data"]["path"]["text"],
                                     "line": match_data["data"]["line_number"],
-                                    "content": match_data["data"]["lines"][
-                                        "text"
-                                    ].strip(),
-                                    "match": match_data["data"]["submatches"][0][
-                                        "match"
-                                    ]["text"],
+                                    "content": match_data["data"]["lines"]["text"].strip(),
+                                    "match": match_data["data"]["submatches"][0]["match"]["text"],
                                 }
                             )
                     except (json.JSONDecodeError, KeyError):
@@ -316,11 +308,7 @@ class FilesystemTool(Tool):
         # Project type detection
         if "pyproject.toml" in project_markers or ".py" in file_types:
             summary_parts.append("Python project")
-        if (
-            "package.json" in project_markers
-            or ".js" in file_types
-            or ".ts" in file_types
-        ):
+        if "package.json" in project_markers or ".js" in file_types or ".ts" in file_types:
             summary_parts.append("JavaScript/TypeScript project")
         if "Cargo.toml" in project_markers or ".rs" in file_types:
             summary_parts.append("Rust project")

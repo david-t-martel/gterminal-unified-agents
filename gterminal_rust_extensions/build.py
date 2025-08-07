@@ -9,6 +9,8 @@ This script handles the complete build process including:
 - Performance benchmarking
 """
 
+import builtins
+import contextlib
 import os
 import shutil
 import subprocess
@@ -65,13 +67,15 @@ def check_prerequisites():
 
     missing_tools = []
 
+    # Note: try-except in loop is acceptable here for tool version checking
+    # as it's a one-time setup operation, not a performance-critical path
     for tool, description in required_tools:
         try:
             result = subprocess.run([tool, "--version"], capture_output=True, text=True)
             print(
                 f"   ✅ {description}: {result.stdout.split()[1] if result.stdout else 'installed'}"
             )
-        except FileNotFoundError:
+        except FileNotFoundError:  # noqa: PERF203
             missing_tools.append((tool, description))
             print(f"   ❌ {description}: not found")
 
@@ -84,9 +88,7 @@ def check_prerequisites():
 
     # Check for maturin
     try:
-        result = subprocess.run(
-            ["maturin", "--version"], capture_output=True, text=True
-        )
+        result = subprocess.run(["maturin", "--version"], capture_output=True, text=True)
         print(f"   ✅ Maturin: {result.stdout.strip()}")
     except FileNotFoundError:
         print("   ⚠️  Maturin not found - will install it")
@@ -126,9 +128,7 @@ def clean_build():
 
 def build_rust_extension(mode="develop", features=None):
     """Build the Rust extension using maturin"""
-    print(
-        f"🦀 Building Rust extension ({'development' if mode == 'develop' else 'release'})..."
-    )
+    print(f"🦀 Building Rust extension ({'development' if mode == 'develop' else 'release'})...")
 
     cmd = ["maturin", mode]
 
@@ -180,12 +180,11 @@ def benchmark_performance():
     # Rust benchmarks
     try:
         run_command(["cargo", "bench"], "Running Rust benchmarks", check=False)
-    except:
+    except (subprocess.CalledProcessError, FileNotFoundError):
         print("   ⚠️  Rust benchmarks not available (requires unstable features)")
 
     # Python benchmarks via example script
     try:
-        import gterminal_rust_extensions
         from gterminal_rust_extensions import benchmark_components
 
         print("   Running component benchmarks...")
@@ -206,9 +205,7 @@ def generate_docs():
     print("📚 Generating documentation...")
 
     # Rust docs
-    run_command(
-        ["cargo", "doc", "--no-deps"], "Generating Rust documentation", check=False
-    )
+    run_command(["cargo", "doc", "--no-deps"], "Generating Rust documentation", check=False)
 
     # Check if docs were generated
     docs_path = Path("target/doc")
@@ -240,7 +237,7 @@ def install_extension():
     print("💾 Installing extension...")
 
     # Force reinstall to ensure we get the latest version
-    try:
+    with contextlib.suppress(builtins.BaseException):
         run_command(
             [
                 sys.executable,
@@ -253,8 +250,6 @@ def install_extension():
             "Uninstalling previous version",
             check=False,
         )
-    except:
-        pass
 
     run_command(["maturin", "develop", "--release"], "Installing development version")
 
@@ -272,15 +267,11 @@ def main():
     import argparse
 
     parser = argparse.ArgumentParser(description="Build GTerminal Rust Extensions")
-    parser.add_argument(
-        "--clean", action="store_true", help="Clean build artifacts first"
-    )
+    parser.add_argument("--clean", action="store_true", help="Clean build artifacts first")
     parser.add_argument("--release", action="store_true", help="Build in release mode")
     parser.add_argument("--no-tests", action="store_true", help="Skip running tests")
     parser.add_argument("--no-install", action="store_true", help="Skip installation")
-    parser.add_argument(
-        "--benchmark", action="store_true", help="Run performance benchmarks"
-    )
+    parser.add_argument("--benchmark", action="store_true", help="Run performance benchmarks")
     parser.add_argument("--docs", action="store_true", help="Generate documentation")
     parser.add_argument("--wheel", action="store_true", help="Create wheel package")
     parser.add_argument("--features", help="Comma-separated list of features to enable")

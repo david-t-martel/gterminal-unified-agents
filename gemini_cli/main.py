@@ -23,9 +23,7 @@ def cli(debug: bool) -> None:
 
 @cli.command()
 @click.argument("prompt", required=False)
-@click.option(
-    "--interactive", "-i", is_flag=True, help="Start interactive terminal mode"
-)
+@click.option("--interactive", "-i", is_flag=True, help="Start interactive terminal mode")
 def analyze(prompt: str | None, interactive: bool) -> None:
     """Analyze code or start interactive session."""
     if interactive or not prompt:

@@ -145,9 +145,7 @@ class CodeAnalysisTool(Tool):
             if proc.returncode != 0:
                 return {"error": f"Failed to find code files: {stderr.decode()}"}
 
-            files = [
-                line.strip() for line in stdout.decode().splitlines() if line.strip()
-            ]
+            files = [line.strip() for line in stdout.decode().splitlines() if line.strip()]
 
             if not files:
                 return {"error": "No code files found"}
@@ -198,17 +196,13 @@ class CodeAnalysisTool(Tool):
                 "metrics": total_metrics,
                 "language_stats": language_stats,
                 "file_details": file_analyses,
-                "summary": self._generate_directory_summary(
-                    total_metrics, language_stats
-                ),
+                "summary": self._generate_directory_summary(total_metrics, language_stats),
             }
 
         except Exception as e:
             return {"error": f"Failed to analyze directory: {e}"}
 
-    async def _check_syntax(
-        self, path: str, language: str | None = None
-    ) -> dict[str, Any]:
+    async def _check_syntax(self, path: str, language: str | None = None) -> dict[str, Any]:
         """Check syntax of a file.
 
         Args:
@@ -467,9 +461,7 @@ class CodeAnalysisTool(Tool):
 
         return min(complexity, 100)  # Cap at 100
 
-    def _generate_file_analysis(
-        self, content: str, language: str, complexity: int
-    ) -> str:
+    def _generate_file_analysis(self, content: str, language: str, complexity: int) -> str:
         """Generate human-readable file analysis.
 
         Args:
@@ -483,9 +475,7 @@ class CodeAnalysisTool(Tool):
         lines = len(content.splitlines())
 
         size_category = "small" if lines < 50 else "medium" if lines < 200 else "large"
-        complexity_level = (
-            "low" if complexity < 10 else "medium" if complexity < 25 else "high"
-        )
+        complexity_level = "low" if complexity < 10 else "medium" if complexity < 25 else "high"
 
         return (
             f"{language.title()} file with {lines} lines. "

@@ -417,7 +417,7 @@ def demo_performance():
     start_time = time.time()
     for _ in range(1000):
         json_str = rust_processor.serialize(test_data)
-        parsed = rust_processor.parse(json_str)
+        rust_processor.parse(json_str)
     rust_time = time.time() - start_time
 
     # Python JSON
@@ -426,7 +426,7 @@ def demo_performance():
     start_time = time.time()
     for _ in range(1000):
         json_str = py_json.dumps(test_data)
-        parsed = py_json.loads(json_str)
+        py_json.loads(json_str)
     python_time = time.time() - start_time
 
     speedup = python_time / rust_time if rust_time > 0 else 0
