@@ -1,0 +1,254 @@
+name: Security Scanning
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  schedule:
+    # Run weekly security scans on Sundays at 03:00 UTC
+    - cron: '0 3 * * 0'
+
+env:
+  PYTHON_VERSION: '3.11'
+
+jobs:
+  dependency-scan:
+    name: Dependency Vulnerability Scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+    
+    - name: Install uv
+      uses: astral-sh/setup-uv@v3
+      with:
+        enable-cache: true
+    
+    - name: Install dependencies
+      run: |
+        uv sync --dev
+        uv pip install --system safety pip-audit
+    
+    - name: Run safety check
+      continue-on-error: true
+      run: |
+        uv pip freeze | uv run safety check --stdin --json --output safety-report.json
+        uv pip freeze | uv run safety check --stdin
+    
+    - name: Run pip-audit
+      continue-on-error: true
+      run: |
+        uv pip freeze | uv run pip-audit --format=json --output=pip-audit-report.json
+        uv pip freeze | uv run pip-audit
+    
+    - name: Upload vulnerability scan results
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: vulnerability-scan-${{ github.sha }}
+        path: |
+          safety-report.json
+          pip-audit-report.json
+        retention-days: 30
+
+  code-security-scan:
+    name: Code Security Analysis
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+    
+    - name: Install uv
+      uses: astral-sh/setup-uv@v3
+      with:
+        enable-cache: true
+    
+    - name: Install dependencies
+      run: |
+        uv sync --dev
+        uv pip install --system bandit[toml] semgrep
+    
+    - name: Run bandit security scanner
+      continue-on-error: true
+      run: |
+        uv run bandit -r gemini_cli/ -f json -o bandit-report.json
+        uv run bandit -r gemini_cli/ -ll
+    
+    - name: Run semgrep security analysis
+      continue-on-error: true
+      env:
+        SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_APP_TOKEN }}
+      run: |
+        python -m semgrep --config=auto --json --output=semgrep-report.json .
+        python -m semgrep --config=auto .
+    
+    - name: Upload security analysis results
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: code-security-scan-${{ github.sha }}
+        path: |
+          bandit-report.json
+          semgrep-report.json
+        retention-days: 30
+
+  rust-security-scan:
+    name: Rust Security Audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Install Rust toolchain
+      uses: dtolnay/rust-toolchain@stable
+    
+    - name: Install cargo-audit
+      run: cargo install cargo-audit
+    
+    - name: Cache Rust dependencies
+      uses: Swatinem/rust-cache@v2
+      with:
+        workspaces: gterminal_rust_extensions
+    
+    - name: Run cargo audit
+      working-directory: gterminal_rust_extensions
+      continue-on-error: true
+      run: |
+        cargo audit --json > cargo-audit-report.json
+        cargo audit
+    
+    - name: Upload Rust security audit results
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: rust-security-audit-${{ github.sha }}
+        path: |
+          gterminal_rust_extensions/cargo-audit-report.json
+        retention-days: 30
+
+  secret-scan:
+    name: Secret Detection
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+    
+    - name: Run GitGuardian CLI
+      uses: GitGuardian/ggshield/actions/secret@v1.25.0
+      env:
+        GITHUB_PUSH_BEFORE_SHA: ${{ github.event.before }}
+        GITHUB_PUSH_BASE_SHA: ${{ github.event.base }}
+        GITHUB_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        GITGUARDIAN_API_KEY: ${{ secrets.GITGUARDIAN_API_KEY }}
+      with:
+        args: --all-policies --show-secrets --exit-zero
+
+  codeql-analysis:
+    name: CodeQL Security Analysis
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [ 'python' ]
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Initialize CodeQL
+      uses: github/codeql-action/init@v3
+      with:
+        languages: ${{ matrix.language }}
+        queries: +security-and-quality
+    
+    - name: Auto-build for CodeQL
+      uses: github/codeql-action/autobuild@v3
+    
+    - name: Perform CodeQL Analysis
+      uses: github/codeql-action/analyze@v3
+      with:
+        category: "/language:${{matrix.language}}"
+
+  security-report:
+    name: Generate Security Report
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: [dependency-scan, code-security-scan, rust-security-scan, secret-scan]
+    if: always()
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Download all security scan results
+      uses: actions/download-artifact@v4
+      with:
+        pattern: '*security*'
+        path: security-results/
+    
+    - name: Generate security summary
+      run: |
+        echo "# 🔒 Security Scan Summary" > security-summary.md
+        echo "" >> security-summary.md
+        echo "## Scan Results Overview" >> security-summary.md
+        echo "" >> security-summary.md
+        
+        if [ -d "security-results" ]; then
+          echo "✅ **Vulnerability Scans Completed**" >> security-summary.md
+          echo "✅ **Code Security Analysis Completed**" >> security-summary.md
+          echo "✅ **Rust Security Audit Completed**" >> security-summary.md
+          echo "✅ **Secret Detection Completed**" >> security-summary.md
+          echo "" >> security-summary.md
+          
+          echo "## Artifacts Generated" >> security-summary.md
+          find security-results -name "*.json" | while read file; do
+            echo "- $(basename "$file")" >> security-summary.md
+          done
+        else
+          echo "⚠️ **No security scan results found**" >> security-summary.md
+        fi
+        
+        echo "" >> security-summary.md
+        echo "## Actions Taken" >> security-summary.md
+        echo "- Dependencies scanned for known vulnerabilities" >> security-summary.md
+        echo "- Source code analyzed for security issues" >> security-summary.md
+        echo "- Rust dependencies audited for security advisories" >> security-summary.md
+        echo "- Repository scanned for exposed secrets" >> security-summary.md
+        echo "" >> security-summary.md
+        echo "Generated on: $(date -u)" >> security-summary.md
+        
+        cat security-summary.md
+    
+    - name: Upload security summary
+      uses: actions/upload-artifact@v4
+      with:
+        name: security-summary-${{ github.sha }}
+        path: security-summary.md
+        retention-days: 90

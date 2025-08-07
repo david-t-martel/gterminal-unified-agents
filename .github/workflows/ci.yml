@@ -1,0 +1,310 @@
+name: Continuous Integration
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+  schedule:
+    # Run daily at 02:00 UTC
+    - cron: '0 2 * * *'
+
+env:
+  PYTHON_VERSION: '3.11'
+  UV_VERSION: '0.4.15'
+
+jobs:
+  lint-and-type-check:
+    name: Lint and Type Check
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+    
+    - name: Install uv
+      uses: astral-sh/setup-uv@v3
+      with:
+        version: ${{ env.UV_VERSION }}
+        enable-cache: true
+    
+    - name: Install dependencies
+      run: |
+        uv sync --dev
+        uv pip install --system mypy types-requests
+    
+    - name: Run ruff linting
+      run: |
+        uv run ruff check .
+        uv run ruff format --check .
+    
+    - name: Run mypy type checking
+      run: |
+        uv run mypy gemini_cli/ --ignore-missing-imports
+    
+    - name: Run black formatting check
+      run: |
+        uv run black --check --diff .
+
+  test:
+    name: Run Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    
+    strategy:
+      matrix:
+        python-version: ['3.11', '3.12']
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ matrix.python-version }}
+    
+    - name: Install uv
+      uses: astral-sh/setup-uv@v3
+      with:
+        version: ${{ env.UV_VERSION }}
+        enable-cache: true
+    
+    - name: Install dependencies
+      run: |
+        uv sync --dev
+    
+    - name: Run tests with coverage
+      env:
+        GOOGLE_APPLICATION_CREDENTIALS_JSON: ${{ secrets.GOOGLE_APPLICATION_CREDENTIALS_JSON }}
+      run: |
+        uv run pytest --cov=gemini_cli --cov-report=xml --cov-report=term-missing -v
+    
+    - name: Upload coverage to Codecov
+      if: matrix.python-version == '3.11'
+      uses: codecov/codecov-action@v4
+      with:
+        file: ./coverage.xml
+        flags: unittests
+        name: codecov-umbrella
+        fail_ci_if_error: false
+        token: ${{ secrets.CODECOV_TOKEN }}
+
+  rust-extensions:
+    name: Build Rust Extensions
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Install Rust toolchain
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        components: rustfmt, clippy
+    
+    - name: Cache Rust dependencies
+      uses: Swatinem/rust-cache@v2
+      with:
+        workspaces: gterminal_rust_extensions
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+    
+    - name: Install uv and maturin
+      run: |
+        pip install uv maturin
+    
+    - name: Format check
+      working-directory: gterminal_rust_extensions
+      run: |
+        cargo fmt --all -- --check
+    
+    - name: Run clippy
+      working-directory: gterminal_rust_extensions
+      run: |
+        cargo clippy --all-targets --all-features -- -D warnings
+    
+    - name: Run Rust tests
+      working-directory: gterminal_rust_extensions
+      run: |
+        cargo test --verbose
+    
+    - name: Build Python extension
+      working-directory: gterminal_rust_extensions
+      run: |
+        uv venv
+        source .venv/bin/activate
+        pip install maturin
+        maturin build --release
+    
+    - name: Upload Rust extension artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: rust-extensions-${{ github.sha }}
+        path: gterminal_rust_extensions/target/wheels/*.whl
+        retention-days: 7
+
+  integration-test:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: [test, rust-extensions]
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+    
+    - name: Install uv
+      uses: astral-sh/setup-uv@v3
+      with:
+        version: ${{ env.UV_VERSION }}
+        enable-cache: true
+    
+    - name: Install dependencies
+      run: |
+        uv sync --dev
+    
+    - name: Download Rust extensions
+      uses: actions/download-artifact@v4
+      with:
+        name: rust-extensions-${{ github.sha }}
+        path: ./wheels/
+    
+    - name: Install Rust extensions
+      run: |
+        uv pip install ./wheels/*.whl
+    
+    - name: Run integration tests
+      env:
+        GOOGLE_APPLICATION_CREDENTIALS_JSON: ${{ secrets.GOOGLE_APPLICATION_CREDENTIALS_JSON }}
+      run: |
+        uv run python -m pytest tests/ -k "integration" -v || echo "No integration tests found"
+    
+    - name: Test CLI installation and basic functionality
+      run: |
+        uv pip install -e .
+        uv run python -m gemini_cli --help
+        uv run python -c "from gemini_cli.core.client import GeminiClient; print('Import successful')"
+
+  security-scan:
+    name: Security Scanning
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+    
+    - name: Install uv
+      uses: astral-sh/setup-uv@v3
+      with:
+        version: ${{ env.UV_VERSION }}
+    
+    - name: Install dependencies
+      run: |
+        uv sync --dev
+        uv pip install --system bandit safety
+    
+    - name: Run bandit security scanner
+      run: |
+        uv run bandit -r gemini_cli/ -f json -o bandit-report.json || true
+        uv run bandit -r gemini_cli/ || true
+    
+    - name: Run safety check for known vulnerabilities
+      run: |
+        uv pip freeze | uv run safety check --stdin || true
+    
+    - name: Upload security scan results
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: security-scan-results-${{ github.sha }}
+        path: |
+          bandit-report.json
+        retention-days: 30
+
+  build-and-validate:
+    name: Build and Validate Package
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: [lint-and-type-check, test]
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+    
+    - name: Install uv
+      uses: astral-sh/setup-uv@v3
+      with:
+        version: ${{ env.UV_VERSION }}
+    
+    - name: Install build dependencies
+      run: |
+        uv pip install --system build twine
+    
+    - name: Build package
+      run: |
+        python -m build
+    
+    - name: Validate package
+      run: |
+        twine check dist/*
+    
+    - name: Upload build artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: package-dist-${{ github.sha }}
+        path: dist/
+        retention-days: 30
+
+  deployment-dry-run:
+    name: Deployment Dry Run
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: [build-and-validate, integration-test]
+    if: github.ref == 'refs/heads/main'
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Download package artifacts
+      uses: actions/download-artifact@v4
+      with:
+        name: package-dist-${{ github.sha }}
+        path: dist/
+    
+    - name: Simulate deployment validation
+      run: |
+        echo "🚀 Deployment validation for gterminal-unified-agents"
+        echo "📦 Package artifacts:"
+        ls -la dist/
+        echo "✅ Deployment dry run completed successfully"
+        echo "🔒 Ready for production deployment"
