@@ -1,0 +1,44 @@
+#!/usr/bin/env python3
+"""
+Enhanced Gemini CLI launcher script
+Uses virtual environment to manage dependencies
+"""
+
+import os
+import sys
+import subprocess
+from pathlib import Path
+
+# Get the script directory
+SCRIPT_DIR = Path(__file__).parent.absolute()
+VENV_PATH = SCRIPT_DIR / ".venv"
+PYTHON_PATH = VENV_PATH / "bin" / "python3"
+
+def main():
+    """Launch the enhanced Gemini CLI with proper environment"""
+    
+    # Check if virtual environment exists
+    if not VENV_PATH.exists() or not PYTHON_PATH.exists():
+        print("❌ Virtual environment not found. Please run: python3 -m venv .venv && .venv/bin/pip install prompt_toolkit rich typer httpx pydantic")
+        return 1
+    
+    # Set environment variables
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(SCRIPT_DIR)
+    
+    # Build command
+    cmd = [str(PYTHON_PATH), "enhanced_gemini_cli.py"] + sys.argv[1:]
+    
+    try:
+        # Launch the enhanced CLI
+        result = subprocess.run(cmd, cwd=SCRIPT_DIR, env=env)
+        return result.returncode
+    except KeyboardInterrupt:
+        print("\n❌ Interrupted by user")
+        return 130
+    except Exception as e:
+        print(f"❌ Error launching enhanced CLI: {e}")
+        return 1
+
+if __name__ == "__main__":
+    sys.exit(main())
