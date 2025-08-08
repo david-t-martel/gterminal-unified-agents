@@ -1,0 +1,125 @@
+{
+  "project_name": "gterminal-py-gemini-dual-project",
+  "last_updated": "2025-08-07",
+  "overview": {
+    "description": "Dual-project AI development environment: gterminal (development tools) + py-gemini (VertexAI agents)",
+    "goals": [
+      "Create production-ready AI development environment",
+      "Integrate VertexAI function calling capabilities",
+      "Maintain STALIN-level code quality enforcement",
+      "Build comprehensive tooling infrastructure"
+    ],
+    "architecture": "Dual-project structure with MCP protocol integration layer",
+    "key_features": [
+      "Rust-based performance tools",
+      "Enhanced ruff LSP with AI suggestions",
+      "Real-time dashboard monitoring",
+      "WebSocket streaming",
+      "Redis caching",
+      "Pre-commit enforcement"
+    ]
+  },
+  "technology_stack": {
+    "languages": ["Python 3.11+", "Rust"],
+    "ai_platforms": ["VertexAI", "Gemini"],
+    "frameworks": ["FastMCP", "pytest", "asyncio"],
+    "infrastructure": ["Docker", "Kubernetes", "Terraform"],
+    "tools": ["ruff", "mypy", "AST-grep", "rust-tools"],
+    "protocols": ["MCP", "JSON-RPC"],
+    "performance": ["Redis", "WebSocket", "Connection pooling"]
+  },
+  "current_state": {
+    "completed": [
+      "Rust-tools integration (522 lines)",
+      "Ruff LSP server with AI (757 lines)",
+      "Dashboard with real-time metrics (port 8767)",
+      "Pre-commit hooks with STALIN-level enforcement",
+      "416 ruff issues auto-resolved"
+    ],
+    "in_progress": [
+      "Resolving 437 remaining ruff issues",
+      "JSON validation fixes",
+      "MCP schema compliance"
+    ],
+    "high_priority_todo": [
+      "VertexAI function calling implementation",
+      "gterminal ↔ py-gemini integration layer",
+      "Automated AI capability testing"
+    ]
+  },
+  "quality_standards": {
+    "test_coverage": "85% minimum",
+    "line_length": 100,
+    "pre_commit": "STALIN-level enforcement",
+    "no_mocks_policy": "Zero tolerance for mocks/stubs in production",
+    "code_review": "Comprehensive via code-reviewer agent"
+  },
+  "performance_metrics": {
+    "rust_tools_integrated": 7,
+    "ruff_issues_resolved": 416,
+    "total_ruff_issues": 853,
+    "resolution_percentage": "48.8%",
+    "dashboard_port": 8767
+  },
+  "agent_coordination": {
+    "deployment_engineer": "DevOps infrastructure (Docker, K8s, Terraform)",
+    "rust_pro": "7 rust-based tools integration",
+    "python_pro": "Ruff LSP AI enhancements",
+    "code_reviewer": "Quality enforcement implementation",
+    "success_pattern": "Parallel execution with coordinated integration"
+  },
+  "file_structure": {
+    "main_projects": {
+      "gterminal": "/home/david/agents/gterminal/",
+      "py_gemini": "/home/david/agents/py-gemini/"
+    },
+    "key_files": {
+      "ruff_lsp": "rufft-claude.sh (757 lines)",
+      "rust_tools": "rust-tools-integration.sh (522 lines)",
+      "config": "pyproject.toml",
+      "pre_commit": ".pre-commit-config.yaml"
+    }
+  },
+  "design_decisions": {
+    "architecture": [
+      "Dual-project structure for separation of concerns",
+      "MCP protocol for cross-project communication",
+      "Rust for performance-critical components",
+      "Python for AI agent logic and orchestration"
+    ],
+    "patterns": [
+      "Async/await for concurrent operations",
+      "Connection pooling for API efficiency",
+      "Redis caching for performance",
+      "Structured logging for debugging"
+    ],
+    "security": [
+      "No hardcoded secrets",
+      "Proper authentication flows",
+      "Pre-commit security scanning"
+    ]
+  },
+  "future_roadmap": {
+    "immediate": [
+      "VertexAI function calling implementation",
+      "Complete ruff issue resolution"
+    ],
+    "short_term": [
+      "gterminal ↔ py-gemini integration",
+      "Automated AI testing framework",
+      "MCP protocol compliance validation"
+    ],
+    "long_term": [
+      "Advanced caching strategies",
+      "WebSocket optimization",
+      "Comprehensive monitoring dashboards",
+      "Performance benchmarking suite"
+    ]
+  },
+  "context_management": {
+    "purpose": "Maintain project continuity across agent sessions",
+    "update_frequency": "After major milestones or architectural changes",
+    "validation": "Regular review against actual implementation",
+    "distribution": "Share with all coordinating agents"
+  }
+}

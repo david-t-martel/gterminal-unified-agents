@@ -1,0 +1,13 @@
+id: no-unwrap
+message: Avoid using unwrap() - use expect() or proper error handling
+severity: warning
+language: rust
+rule:
+  pattern: "$EXPR.unwrap()"
+fix: '$EXPR.expect("TODO Add error context")'
+note: |
+  unwrap() will panic on None/Err values. Use:
+  - expect("message") for better panic messages
+  - ? operator in functions returning Result
+  - if let Some(x) = ... for Options
+  - match for comprehensive handling

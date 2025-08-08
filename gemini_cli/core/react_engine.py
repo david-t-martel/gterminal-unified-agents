@@ -4,11 +4,11 @@ Implements the ReAct (Reason, Act, Observe) pattern using Google Gemini
 for reasoning and a simple tool system for actions.
 """
 
-import json
-import logging
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
+import json
+import logging
 from typing import Any
 
 from ..tools.registry import ToolRegistry
@@ -35,7 +35,11 @@ class Step:
     tool_name: str | None = None
     tool_params: dict[str, Any] | None = None
     result: Any | None = None
-    timestamp: datetime = datetime.now()
+    timestamp: datetime | None = None
+
+    def __post_init__(self) -> None:
+        if self.timestamp is None:
+            self.timestamp = datetime.now()
 
 
 class SimpleReactEngine:
@@ -99,13 +103,22 @@ class SimpleReactEngine:
 
         # Get available tools
         available_tools = list(self.tool_registry.list_tools().keys())
+        tools_list = [
+            self.tool_registry.get_tool(name)
+            for name in available_tools
+            if self.tool_registry.get_tool(name)
+        ]
 
         reasoning_prompt = f"""
 Analyze this request and create a plan using available tools: {available_tools}
 
 Request: {request}
 
-Respond with a JSON plan in this format:
+You have access to the following tools with function calling:
+- filesystem: File and directory operations (read_file, write_file, list_files, search_files, search_content)
+- code_analysis: Code analysis operations (analyze_complexity, check_style, find_issues)
+
+You can call these tools directly if needed. Otherwise, respond with a JSON plan in this format:
 {{
     "reasoning": "Your analysis of what needs to be done",
     "actions": [
@@ -121,13 +134,25 @@ Keep it simple and focused. Use only the tools that are necessary.
 """
 
         try:
-            response = await self.client.process(reasoning_prompt)
-            plan = self._extract_json_from_response(response)
+            # Use process_with_tools to enable function calling
+            response = await self.client.process_with_tools(reasoning_prompt, tools_list)
+
+            # Check if function calls were made
+            if "Function calls made:" in response:
+                logger.info("Function calling was triggered during reasoning")
+                # Extract the plan from the response
+                plan = {
+                    "reasoning": "Function calling was used directly",
+                    "actions": [],  # No manual actions needed if functions were called
+                }
+            else:
+                plan = self._extract_json_from_response(response)
+
             step.result = plan
             logger.info(f"Plan created with {len(plan.get('actions', []))} actions")
             return plan
         except Exception as e:
-            logger.error(f"Reasoning failed: {e}")
+            logger.exception("Reasoning failed")
             step.result = {"error": str(e)}
             return {"actions": []}
 
@@ -158,6 +183,10 @@ Keep it simple and focused. Use only the tools that are necessary.
                 return {"error": error}
 
             tool = self.tool_registry.get_tool(tool_name)
+            if tool is None:
+                error = f"Tool '{tool_name}' not found"
+                step.result = {"error": error}
+                return {"error": error}
             result = await tool.execute(params)
             step.result = result
             return result
@@ -165,7 +194,7 @@ Keep it simple and focused. Use only the tools that are necessary.
         except Exception as e:
             error = f"Action failed: {e}"
             step.result = {"error": error}
-            logger.error(error)
+            logger.exception(error)
             return {"error": error}
 
     async def _complete(self, request: str, results: list[dict[str, Any]]) -> str:
@@ -198,7 +227,7 @@ Be concise but complete.
         except Exception as e:
             error = f"Completion failed: {e}"
             step.result = error
-            logger.error(error)
+            logger.exception(error)
             return error
 
     def _extract_json_from_response(self, response: str) -> dict[str, Any]:
@@ -217,7 +246,8 @@ Be concise but complete.
 
             if start != -1 and end != 0:
                 json_str = response[start:end]
-                return json.loads(json_str)
+                parsed_json: dict[str, Any] = json.loads(json_str)
+                return parsed_json
             else:
                 # Fallback: return simple structure
                 return {"reasoning": response, "actions": []}
@@ -239,7 +269,7 @@ Be concise but complete.
                     "description": step.description,
                     "tool": step.tool_name,
                     "success": step.result and "error" not in str(step.result),
-                    "timestamp": step.timestamp.isoformat(),
+                    "timestamp": step.timestamp.isoformat() if step.timestamp else "",
                 }
                 for step in self.steps
             ],

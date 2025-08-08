@@ -1,0 +1,450 @@
+# Production Docker Compose Configuration
+# High-performance DevOps stack with integrated Rust tools
+version: "3.8"
+
+services:
+  # ========================
+  # Rust Filewatcher Service
+  # ========================
+  rust-filewatcher:
+    build:
+      context: ./rust-filewatcher
+      dockerfile: Dockerfile
+    container_name: gterminal-filewatcher
+    ports:
+      - "8765:8765" # WebSocket server
+      - "8766:8766" # HTTP metrics
+    environment:
+      RUST_LOG: "${RUST_LOG:-info}"
+      WATCH_PATHS: "/workspace:/usr/src/app"
+      WEBSOCKET_PORT: "8765"
+      METRICS_PORT: "8766"
+      PERFORMANCE_MODE: "high"
+      BATCH_SIZE: "${FILEWATCHER_BATCH_SIZE:-100}"
+      DEBOUNCE_MS: "${FILEWATCHER_DEBOUNCE_MS:-50}"
+    volumes:
+      - .:/workspace:ro
+      - filewatcher_data:/data
+      - /var/log/gterminal:/logs
+    networks:
+      - gterminal_network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8766/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "1.0"
+        reservations:
+          memory: 256M
+          cpus: "0.5"
+
+  # ========================
+  # Ruff LSP Service
+  # ========================
+  ruff-lsp:
+    build:
+      context: .
+      dockerfile: Dockerfile.ruff-lsp
+    container_name: gterminal-ruff-lsp
+    ports:
+      - "8767:8767" # LSP server
+      - "8768:8768" # Health/metrics
+    environment:
+      LSP_PORT: "8767"
+      METRICS_PORT: "8768"
+      LOG_LEVEL: "${LSP_LOG_LEVEL:-INFO}"
+      WORKSPACE_PATH: "/workspace"
+      AI_INTEGRATION: "true"
+      CLAUDE_API_KEY: "${CLAUDE_API_KEY}"
+      MAX_CONCURRENT_REQUESTS: "${LSP_MAX_CONCURRENT:-10}"
+    volumes:
+      - .:/workspace
+      - lsp_cache:/cache
+      - /var/log/gterminal:/logs
+    depends_on:
+      - rust-filewatcher
+    networks:
+      - gterminal_network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8768/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: "1.5"
+        reservations:
+          memory: 512M
+          cpus: "0.75"
+
+  # ========================
+  # Development Dashboard
+  # ========================
+  development-dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile.dashboard
+    container_name: gterminal-dashboard
+    ports:
+      - "8769:8080" # Dashboard UI
+      - "8770:8081" # WebSocket API
+    environment:
+      DASHBOARD_PORT: "8080"
+      WEBSOCKET_PORT: "8081"
+      FILEWATCHER_WS_URL: "ws://rust-filewatcher:8765"
+      LSP_SERVER_URL: "http://ruff-lsp:8767"
+      METRICS_ENDPOINTS: >
+        http://rust-filewatcher:8766/metrics,
+        http://ruff-lsp:8768/metrics,
+        http://prometheus:9090,
+        http://gterminal-app:8000/metrics
+      UPDATE_INTERVAL: "${DASHBOARD_UPDATE_INTERVAL:-5}"
+      THEME: "${DASHBOARD_THEME:-dark}"
+    volumes:
+      - dashboard_data:/data
+      - /var/log/gterminal:/logs:ro
+    depends_on:
+      - rust-filewatcher
+      - ruff-lsp
+      - prometheus
+    networks:
+      - gterminal_network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # ========================
+  # Enhanced GTerminal App
+  # ========================
+  gterminal-app:
+    build:
+      context: .
+      dockerfile: Dockerfile.production
+      target: production
+    container_name: gterminal-app
+    ports:
+      - "8080:8000"
+      - "3000:3000" # MCP server
+    environment:
+      # Core application
+      START_MODE: "${START_MODE:-server}"
+      LOG_LEVEL: "${LOG_LEVEL:-INFO}"
+      WORKERS: "${GTERMINAL_WORKERS:-4}"
+
+      # Service integration
+      FILEWATCHER_WS_URL: "ws://rust-filewatcher:8765"
+      LSP_SERVER_URL: "http://ruff-lsp:8767"
+      DASHBOARD_URL: "http://development-dashboard:8080"
+
+      # Google Cloud
+      GOOGLE_GENAI_USE_VERTEXAI: "${GOOGLE_GENAI_USE_VERTEXAI:-True}"
+      GOOGLE_CLOUD_PROJECT: "${GOOGLE_CLOUD_PROJECT}"
+      GOOGLE_CLOUD_LOCATION: "${GOOGLE_CLOUD_LOCATION:-us-central1}"
+      GCP_PROFILE: "${GCP_PROFILE:-business}"
+
+      # Performance
+      MAX_WORKERS: "${MAX_WORKERS:-8}"
+      WORKER_TIMEOUT: "${WORKER_TIMEOUT:-300}"
+      REACT_CACHE_SIZE: "${REACT_CACHE_SIZE:-2000}"
+
+      # Database and cache
+      DATABASE_URL: "postgresql://${POSTGRES_USER:-gterminal}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-gterminal}"
+      REDIS_URL: "redis://redis:6379"
+
+      # Monitoring
+      PROMETHEUS_METRICS: "true"
+      JAEGER_ENDPOINT: "http://jaeger:14268"
+
+    volumes:
+      - gterminal_data:/data
+      - /var/log/gterminal:/logs
+      - gterminal_config:/config
+      - "${GOOGLE_APPLICATION_CREDENTIALS:-/dev/null}:/app/service-account.json:ro"
+    depends_on:
+      - redis
+      - postgres
+      - rust-filewatcher
+      - ruff-lsp
+    networks:
+      - gterminal_network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          memory: 6G
+          cpus: "4.0"
+        reservations:
+          memory: 2G
+          cpus: "2.0"
+
+  # ========================
+  # Advanced Monitoring Stack
+  # ========================
+  prometheus:
+    image: prom/prometheus:v2.45.0
+    container_name: gterminal-prometheus
+    ports:
+      - "9090:9090"
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--web.console.libraries=/etc/prometheus/console_libraries"
+      - "--web.console.templates=/etc/prometheus/consoles"
+      - "--storage.tsdb.retention.time=30d"
+      - "--web.enable-lifecycle"
+      - "--web.enable-admin-api"
+      - "--storage.tsdb.wal-compression"
+    volumes:
+      - ./monitoring/prometheus.production.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/rules/:/etc/prometheus/rules/:ro
+      - prometheus_data:/prometheus
+    networks:
+      - gterminal_network
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "wget",
+          "--quiet",
+          "--tries=1",
+          "--spider",
+          "http://localhost:9090/-/healthy",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  grafana:
+    image: grafana/grafana:10.0.0
+    container_name: gterminal-grafana
+    ports:
+      - "3003:3000"
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: "${GRAFANA_PASSWORD:-admin}"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_INSTALL_PLUGINS: >
+        grafana-piechart-panel,
+        grafana-clock-panel,
+        grafana-worldmap-panel,
+        grafana-polystat-panel
+      GF_FEATURE_TOGGLES_ENABLE: "ngalert"
+      GF_ALERTING_ENABLED: "true"
+    volumes:
+      - ./monitoring/dashboards/:/var/lib/grafana/dashboards/:ro
+      - ./monitoring/provisioning/:/etc/grafana/provisioning/:ro
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      - prometheus
+    networks:
+      - gterminal_network
+    restart: unless-stopped
+
+  # ========================
+  # Distributed Tracing
+  # ========================
+  jaeger:
+    image: jaegertracing/all-in-one:1.47
+    container_name: gterminal-jaeger
+    ports:
+      - "16686:16686" # UI
+      - "14268:14268" # HTTP collector
+      - "14250:14250" # gRPC collector
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+      SPAN_STORAGE_TYPE: "badger"
+      BADGER_EPHEMERAL: "false"
+      BADGER_DIRECTORY_VALUE: "/badger/data"
+      BADGER_DIRECTORY_KEY: "/badger/key"
+    volumes:
+      - jaeger_data:/badger
+    networks:
+      - gterminal_network
+    restart: unless-stopped
+
+  # ========================
+  # Log Aggregation
+  # ========================
+  loki:
+    image: grafana/loki:2.8.0
+    container_name: gterminal-loki
+    ports:
+      - "3100:3100"
+    volumes:
+      - ./monitoring/loki.yml:/etc/loki/local-config.yaml:ro
+      - loki_data:/loki
+    networks:
+      - gterminal_network
+    restart: unless-stopped
+    command: -config.file=/etc/loki/local-config.yaml
+
+  promtail:
+    image: grafana/promtail:2.8.0
+    container_name: gterminal-promtail
+    volumes:
+      - ./monitoring/promtail.yml:/etc/promtail/config.yml:ro
+      - /var/log/gterminal:/var/log/gterminal:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+    depends_on:
+      - loki
+    networks:
+      - gterminal_network
+    restart: unless-stopped
+    command: -config.file=/etc/promtail/config.yml
+
+  # ========================
+  # High-Performance Load Balancer
+  # ========================
+  nginx:
+    image: nginx:1.25-alpine
+    container_name: gterminal-nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.production.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/ssl/:/etc/nginx/ssl/:ro
+      - ./nginx/static/:/usr/share/nginx/html/:ro
+    depends_on:
+      - gterminal-app
+      - development-dashboard
+      - grafana
+    networks:
+      - gterminal_network
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "wget",
+          "--quiet",
+          "--tries=1",
+          "--spider",
+          "http://localhost/health",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # ========================
+  # Database Services
+  # ========================
+  redis:
+    image: redis:7.0-alpine
+    container_name: gterminal-redis
+    ports:
+      - "6379:6379"
+    command: >
+      redis-server
+      --appendonly yes
+      --appendfsync everysec
+      --maxmemory 2g
+      --maxmemory-policy allkeys-lru
+      --save 900 1 300 10 60 10000
+      ${REDIS_PASSWORD:+--requirepass $REDIS_PASSWORD}
+    volumes:
+      - redis_data:/data
+    networks:
+      - gterminal_network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: "1.0"
+
+  postgres:
+    image: postgres:15-alpine
+    container_name: gterminal-postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: "${POSTGRES_DB:-gterminal}"
+      POSTGRES_USER: "${POSTGRES_USER:-gterminal}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD}"
+      POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256"
+      PGDATA: "/var/lib/postgresql/data/pgdata"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./scripts/init-production-db.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    networks:
+      - gterminal_network
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${POSTGRES_USER:-gterminal} -d ${POSTGRES_DB:-gterminal}",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+          cpus: "2.0"
+
+# ========================
+# Networks and Volumes
+# ========================
+networks:
+  gterminal_network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.22.0.0/16
+
+volumes:
+  # Rust services data
+  filewatcher_data:
+    driver: local
+  lsp_cache:
+    driver: local
+  dashboard_data:
+    driver: local
+
+  # Application data
+  gterminal_data:
+    driver: local
+  gterminal_config:
+    driver: local
+
+  # Database volumes
+  redis_data:
+    driver: local
+  postgres_data:
+    driver: local
+
+  # Monitoring volumes
+  prometheus_data:
+    driver: local
+  grafana_data:
+    driver: local
+  loki_data:
+    driver: local
+  jaeger_data:
+    driver: local

@@ -1,0 +1,32 @@
+{
+  "timestamp": "2025-08-08T07:52:17Z",
+  "project": "gterminal",
+  "configurations": [
+    {
+      "name": ".mcp",
+      "file": ".mcp.json",
+      "servers": [
+        {
+          "name": "gterminal-auth",
+          "compliance": true,
+          "log_file": "/tmp/mcp-inspector-1732153/inspector_gterminal-auth.log"
+        },
+        {
+          "name": "gterminal-monitoring",
+          "compliance": true,
+          "log_file": "/tmp/mcp-inspector-1732153/inspector_gterminal-monitoring.log"
+        },
+        {
+          "name": "gterminal-react",
+          "compliance": true,
+          "log_file": "/tmp/mcp-inspector-1732153/inspector_gterminal-react.log"
+        },
+        {
+          "name": "gterminal-terminal",
+          "compliance": true,
+          "log_file": "/tmp/mcp-inspector-1732153/inspector_gterminal-terminal.log"
+        }
+      ]
+    }
+  ]
+}

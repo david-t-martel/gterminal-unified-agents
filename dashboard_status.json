@@ -1,0 +1,12 @@
+{
+    "timestamp": "2025-08-08T10:38:08-04:00",
+    "project": "gterminal",
+    "status": {
+        "ruff_issues": 3274
+0,
+        "mypy_issues": 0
+0,
+        "ast_grep_issues": 0,
+        "test_coverage": 0
+    }
+}

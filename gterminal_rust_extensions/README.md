@@ -10,6 +10,7 @@ High-performance Rust extensions for the GTerminal ReAct engine, providing four 
 ## Features
 
 ### 🚀 Performance
+
 - **10-100x faster** than pure Python implementations
 - SIMD-optimized JSON processing
 - Concurrent cache operations with DashMap
@@ -17,18 +18,21 @@ High-performance Rust extensions for the GTerminal ReAct engine, providing four 
 - Zero-copy operations where possible
 
 ### 🔒 Security
+
 - Command allowlist/blocklist for execution
 - Process isolation and timeout management
 - Input validation and sanitization
 - Memory limits and resource controls
 
 ### 📊 Monitoring
+
 - Comprehensive statistics tracking
 - Performance metrics and benchmarking
 - Memory usage monitoring
 - Operation counters and timing
 
 ### 🧵 Concurrency
+
 - Async/await support with tokio runtime
 - Thread-safe concurrent data structures
 - Non-blocking I/O operations
@@ -37,6 +41,7 @@ High-performance Rust extensions for the GTerminal ReAct engine, providing four 
 ## Installation
 
 ### Prerequisites
+
 - Rust 1.70+ with Cargo
 - Python 3.8+
 - maturin (PyO3 build tool)
@@ -271,20 +276,22 @@ print(f"Average execution time: {stats['avg_execution_time_ms']}ms")
 
 Typical performance improvements over pure Python:
 
-| Component | Operation | Speedup | Notes |
-|-----------|-----------|---------|-------|
-| RustCache | Set/Get 10K items | 8-12x | Concurrent access, TTL management |
-| RustJsonProcessor | Parse/Serialize | 3-7x | SIMD acceleration, streaming |
-| RustFileOps | Batch file ops | 5-15x | Parallel I/O, memory mapping |
-| RustCommandExecutor | Process mgmt | 2-5x | Async I/O, efficient monitoring |
+| Component           | Operation         | Speedup | Notes                             |
+| ------------------- | ----------------- | ------- | --------------------------------- |
+| RustCache           | Set/Get 10K items | 8-12x   | Concurrent access, TTL management |
+| RustJsonProcessor   | Parse/Serialize   | 3-7x    | SIMD acceleration, streaming      |
+| RustFileOps         | Batch file ops    | 5-15x   | Parallel I/O, memory mapping      |
+| RustCommandExecutor | Process mgmt      | 2-5x    | Async I/O, efficient monitoring   |
 
 ### Memory Usage
+
 - **Lower memory footprint**: Efficient Rust data structures
 - **Memory limits**: Configurable limits prevent OOM issues
 - **Memory tracking**: Built-in allocation monitoring
 - **Zero-copy**: Minimal data copying between Rust/Python
 
 ### Concurrency
+
 - **Thread-safe**: All components support concurrent access
 - **Lock-free**: DashMap and other concurrent data structures
 - **Async/await**: Full tokio async runtime integration
@@ -335,6 +342,7 @@ Typical performance improvements over pure Python:
 These extensions are designed to integrate seamlessly with the GTerminal ReAct engine:
 
 ### ReAct Pattern Integration
+
 ```python
 # Example ReAct engine integration
 class GTerminalReactEngine:
@@ -370,6 +378,7 @@ class GTerminalReactEngine:
 ```
 
 ### Performance Monitoring
+
 ```python
 def get_performance_metrics():
     return {
@@ -457,6 +466,7 @@ python build.py --features "simd,optimization"
 ### Common Issues
 
 1. **Build Errors**
+
    ```bash
    # Update Rust toolchain
    rustup update
@@ -466,6 +476,7 @@ python build.py --features "simd,optimization"
    ```
 
 2. **Import Errors**
+
    ```python
    # Check if extension is installed
    import gterminal_rust_extensions
@@ -473,6 +484,7 @@ python build.py --features "simd,optimization"
    ```
 
 3. **Performance Issues**
+
    ```python
    # Enable debug logging
    from gterminal_rust_extensions import init_tracing
@@ -509,6 +521,7 @@ export RUST_LOG=gterminal_rust_extensions=debug
 5. Submit a pull request
 
 ### Code Style
+
 - Rust: `cargo fmt` and `cargo clippy`
 - Python: Follow existing patterns in `example_usage.py`
 - Documentation: Comprehensive docstrings and examples

@@ -1,0 +1,348 @@
+# GTerminal Alerting Rules
+# Comprehensive alerting for DevOps stack
+
+groups:
+  # ======================
+  # Service Availability
+  # ======================
+
+  - name: service-availability
+    rules:
+      - alert: ServiceDown
+        expr: up == 0
+        for: 30s
+        labels:
+          severity: critical
+          category: availability
+        annotations:
+          summary: "Service {{ $labels.job }} is down"
+          description: "Service {{ $labels.job }} on instance {{ $labels.instance }} has been down for more than 30 seconds."
+          runbook_url: "https://wiki.gterminal.dev/alerts/service-down"
+
+      - alert: ServiceDegraded
+        expr: (rate(up[5m]) < 0.9) and (up == 1)
+        for: 2m
+        labels:
+          severity: warning
+          category: availability
+        annotations:
+          summary: "Service {{ $labels.job }} is experiencing instability"
+          description: "Service {{ $labels.job }} has been unstable with {{ $value | humanizePercentage }} uptime over the last 5 minutes."
+
+  # ======================
+  # Rust Filewatcher Alerts
+  # ======================
+
+  - name: rust-filewatcher
+    rules:
+      - alert: FilewatcherHighMemoryUsage
+        expr: rust_filewatcher_memory_usage_bytes > 512 * 1024 * 1024
+        for: 5m
+        labels:
+          severity: warning
+          service: rust-filewatcher
+          category: performance
+        annotations:
+          summary: "Rust Filewatcher memory usage is high"
+          description: "Filewatcher memory usage is {{ $value | humanizeBytes }}, above 512MB threshold."
+
+      - alert: FilewatcherHighCPUUsage
+        expr: rate(rust_filewatcher_cpu_usage_seconds_total[5m]) > 0.8
+        for: 3m
+        labels:
+          severity: warning
+          service: rust-filewatcher
+          category: performance
+        annotations:
+          summary: "Rust Filewatcher CPU usage is high"
+          description: "Filewatcher CPU usage is {{ $value | humanizePercentage }} over the last 5 minutes."
+
+      - alert: FilewatcherEventQueueBacklog
+        expr: rust_filewatcher_event_queue_size > 1000
+        for: 1m
+        labels:
+          severity: critical
+          service: rust-filewatcher
+          category: performance
+        annotations:
+          summary: "Filewatcher event queue is backing up"
+          description: "Event queue has {{ $value }} events pending, indicating processing delays."
+
+      - alert: FilewatcherWebSocketDisconnected
+        expr: rust_filewatcher_websocket_connections == 0
+        for: 1m
+        labels:
+          severity: warning
+          service: rust-filewatcher
+          category: connectivity
+        annotations:
+          summary: "No WebSocket connections to filewatcher"
+          description: "Filewatcher has no active WebSocket connections, services may not be receiving file change events."
+
+      - alert: FilewatcherHighErrorRate
+        expr: rate(rust_filewatcher_errors_total[5m]) > 1
+        for: 2m
+        labels:
+          severity: warning
+          service: rust-filewatcher
+          category: errors
+        annotations:
+          summary: "High error rate in Rust Filewatcher"
+          description: "Filewatcher is experiencing {{ $value }} errors per second over the last 5 minutes."
+
+  # ======================
+  # Ruff LSP Alerts
+  # ======================
+
+  - name: ruff-lsp
+    rules:
+      - alert: RuffLSPHighResponseTime
+        expr: histogram_quantile(0.95, rate(ruff_lsp_request_duration_seconds_bucket[5m])) > 5
+        for: 3m
+        labels:
+          severity: warning
+          service: ruff-lsp
+          category: performance
+        annotations:
+          summary: "Ruff LSP response time is high"
+          description: "95th percentile response time is {{ $value }}s, above 5s threshold."
+
+      - alert: RuffLSPHighErrorRate
+        expr: rate(ruff_lsp_errors_total[5m]) / rate(ruff_lsp_requests_total[5m]) > 0.1
+        for: 2m
+        labels:
+          severity: critical
+          service: ruff-lsp
+          category: errors
+        annotations:
+          summary: "High error rate in Ruff LSP"
+          description: "Error rate is {{ $value | humanizePercentage }}, above 10% threshold."
+
+      - alert: RuffLSPAIIntegrationFailed
+        expr: increase(ruff_lsp_ai_failures_total[10m]) > 5
+        for: 1m
+        labels:
+          severity: warning
+          service: ruff-lsp
+          category: integration
+        annotations:
+          summary: "AI integration failures in Ruff LSP"
+          description: "{{ $value }} AI integration failures in the last 10 minutes."
+
+  # ======================
+  # GTerminal Application Alerts
+  # ======================
+
+  - name: gterminal-app
+    rules:
+      - alert: GTerminalHighResponseTime
+        expr: histogram_quantile(0.95, rate(http_request_duration_seconds_bucket[5m])) > 10
+        for: 5m
+        labels:
+          severity: warning
+          service: gterminal-app
+          category: performance
+        annotations:
+          summary: "GTerminal response time is high"
+          description: "95th percentile response time is {{ $value }}s, above 10s threshold."
+
+      - alert: GTerminalHighErrorRate
+        expr: rate(http_requests_total{status=~"5.."}[5m]) / rate(http_requests_total[5m]) > 0.05
+        for: 3m
+        labels:
+          severity: critical
+          service: gterminal-app
+          category: errors
+        annotations:
+          summary: "High HTTP error rate in GTerminal"
+          description: "HTTP 5xx error rate is {{ $value | humanizePercentage }}, above 5% threshold."
+
+      - alert: GTerminalDatabaseConnectionIssues
+        expr: gterminal_database_connection_failures_total > 0
+        for: 1m
+        labels:
+          severity: critical
+          service: gterminal-app
+          category: database
+        annotations:
+          summary: "Database connection issues in GTerminal"
+          description: "{{ $value }} database connection failures detected."
+
+      - alert: GTerminalReActAgentTimeout
+        expr: increase(gterminal_react_agent_timeouts_total[10m]) > 3
+        for: 1m
+        labels:
+          severity: warning
+          service: gterminal-app
+          category: agent
+        annotations:
+          summary: "ReAct agent timeouts in GTerminal"
+          description: "{{ $value }} agent timeouts in the last 10 minutes."
+
+  # ======================
+  # Infrastructure Alerts
+  # ======================
+
+  - name: infrastructure
+    rules:
+      - alert: RedisConnectionFailed
+        expr: redis_connected_clients < 1
+        for: 1m
+        labels:
+          severity: critical
+          service: redis
+          category: database
+        annotations:
+          summary: "Redis has no connected clients"
+          description: "Redis appears to be unreachable or not functioning properly."
+
+      - alert: RedisHighMemoryUsage
+        expr: redis_memory_used_bytes / redis_memory_max_bytes > 0.9
+        for: 5m
+        labels:
+          severity: warning
+          service: redis
+          category: performance
+        annotations:
+          summary: "Redis memory usage is high"
+          description: "Redis memory usage is {{ $value | humanizePercentage }}, above 90% threshold."
+
+      - alert: PostgreSQLConnectionsHigh
+        expr: pg_stat_database_numbackends / pg_settings_max_connections > 0.8
+        for: 5m
+        labels:
+          severity: warning
+          service: postgres
+          category: database
+        annotations:
+          summary: "PostgreSQL connection usage is high"
+          description: "Connection usage is {{ $value | humanizePercentage }}, above 80% of max connections."
+
+      - alert: DiskSpaceHigh
+        expr: (node_filesystem_size_bytes - node_filesystem_avail_bytes) / node_filesystem_size_bytes > 0.85
+        for: 10m
+        labels:
+          severity: warning
+          category: disk
+        annotations:
+          summary: "Disk space usage is high on {{ $labels.instance }}"
+          description: "Disk usage is {{ $value | humanizePercentage }} on mount {{ $labels.mountpoint }}."
+
+      - alert: HighCPUUsage
+        expr: (1 - rate(node_cpu_seconds_total{mode="idle"}[5m])) > 0.9
+        for: 10m
+        labels:
+          severity: warning
+          category: cpu
+        annotations:
+          summary: "High CPU usage on {{ $labels.instance }}"
+          description: "CPU usage is {{ $value | humanizePercentage }} over the last 5 minutes."
+
+      - alert: HighMemoryUsage
+        expr: (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) > 0.9
+        for: 10m
+        labels:
+          severity: warning
+          category: memory
+        annotations:
+          summary: "High memory usage on {{ $labels.instance }}"
+          description: "Memory usage is {{ $value | humanizePercentage }} of total memory."
+
+  # ======================
+  # Container Alerts
+  # ======================
+
+  - name: containers
+    rules:
+      - alert: ContainerHighCPUUsage
+        expr: rate(container_cpu_usage_seconds_total[5m]) > 1.5
+        for: 5m
+        labels:
+          severity: warning
+          category: container
+        annotations:
+          summary: "Container {{ $labels.name }} has high CPU usage"
+          description: "Container CPU usage is {{ $value }} cores over the last 5 minutes."
+
+      - alert: ContainerHighMemoryUsage
+        expr: container_memory_usage_bytes / container_spec_memory_limit_bytes > 0.9
+        for: 5m
+        labels:
+          severity: warning
+          category: container
+        annotations:
+          summary: "Container {{ $labels.name }} has high memory usage"
+          description: "Container memory usage is {{ $value | humanizePercentage }} of limit."
+
+      - alert: ContainerRestartingFrequently
+        expr: rate(container_last_seen[5m]) > 0
+        for: 0m
+        labels:
+          severity: critical
+          category: container
+        annotations:
+          summary: "Container {{ $labels.name }} is restarting frequently"
+          description: "Container has been restarting frequently, indicating instability."
+
+  # ======================
+  # Development Dashboard Alerts
+  # ======================
+
+  - name: dashboard
+    rules:
+      - alert: DashboardConnectionsLow
+        expr: dashboard_websocket_connections < 1
+        for: 5m
+        labels:
+          severity: info
+          service: development-dashboard
+          category: monitoring
+        annotations:
+          summary: "Development dashboard has no active connections"
+          description: "No developers are currently monitoring the dashboard."
+
+      - alert: DashboardUpdateLag
+        expr: time() - dashboard_last_update_timestamp > 300
+        for: 2m
+        labels:
+          severity: warning
+          service: development-dashboard
+          category: monitoring
+        annotations:
+          summary: "Development dashboard updates are lagging"
+          description: "Dashboard hasn't updated metrics in {{ $value }}s, indicating possible issues."
+
+  # ======================
+  # Composite Alerts (Advanced)
+  # ======================
+
+  - name: composite-health
+    rules:
+      - alert: SystemHealthDegraded
+        expr: |
+          (
+            count(up{job=~"rust-filewatcher|ruff-lsp|gterminal-app|development-dashboard"} == 0) /
+            count(up{job=~"rust-filewatcher|ruff-lsp|gterminal-app|development-dashboard"})
+          ) > 0.25
+        for: 1m
+        labels:
+          severity: critical
+          category: system
+        annotations:
+          summary: "Overall system health is degraded"
+          description: "More than 25% of core services are down, system functionality is severely impacted."
+
+      - alert: PerformanceDegradation
+        expr: |
+          (
+            histogram_quantile(0.95, rate(rust_filewatcher_request_duration_seconds_bucket[5m])) > 1 or
+            histogram_quantile(0.95, rate(ruff_lsp_request_duration_seconds_bucket[5m])) > 5 or
+            histogram_quantile(0.95, rate(http_request_duration_seconds_bucket[5m])) > 10
+          )
+        for: 5m
+        labels:
+          severity: warning
+          category: performance
+        annotations:
+          summary: "System performance is degraded"
+          description: "Multiple services are showing elevated response times."

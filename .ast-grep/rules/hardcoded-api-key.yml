@@ -1,0 +1,15 @@
+id: hardcoded-api-key
+message: "# SECURITY: Hardcoded API key detected - use environment variables"
+severity: error
+language: python
+rule:
+  any:
+    - pattern: '$VAR = "sk-$$$KEY"' # OpenAI style
+    - pattern: '$VAR = "AIza$$$KEY"' # Google API key
+    - pattern: '$VAR = "ya29.$$$KEY"' # Google OAuth token
+    - pattern: 'api_key="$KEY"'
+    - pattern: 'API_KEY = "$KEY"'
+  constraints:
+    KEY:
+      regex: "[A-Za-z0-9+/]{20,}"
+note: "Use os.getenv() or secure configuration management"

@@ -1,0 +1,190 @@
+{
+	"folders": [
+		{
+			"path": "gterminal"
+		},
+		{
+			"path": "py-gemini"
+		},
+		{
+			"path": "gapp"
+		},
+		{
+			"path": "unified-gapp-gterminal"
+		},
+		{
+			"path": "mcp"
+		}
+	],
+	"settings": {
+		"terminal.integrated.suggest.enabled": true,
+		"terminal.integrated.stickyScroll.enabled": true,
+
+		"mcp.executeCommandsWithoutConfirmation": true,
+		"mcp.allowExecutableRuns": true,
+		"security.workspace.trust.untrustedFiles": "open",
+		"security.workspace.trust.banner": "never",
+		"security.workspace.trust.startupPrompt": "never",
+		"security.workspace.trust.enabled": false,
+
+		"python.linting.enabled": true,
+		"python.linting.ruffEnabled": true,
+		"python.formatting.provider": "none",
+		"python.analysis.autoImportCompletions": true,
+		"python.analysis.autoSearchPaths": true,
+		"python.analysis.diagnosticMode": "workspace",
+		"python.analysis.typeCheckingMode": "strict",
+
+		"task.allowAutomaticTasks": "on",
+		"task.slowProviderWarning": false,
+		"extensions.autoCheckUpdates": false,
+		"extensions.autoUpdate": false,
+
+		"mcp": {
+			"servers": {
+				"rust-fs-server-75bfda66": {
+					"type": "stdio",
+					"command": "/home/david/.local/bin/rust-fs-server",
+					"args": ["--mode", "mcp"],
+					"env": {
+						"RUST_LOG": "warn"
+					}
+				},
+				"rust-fs-optimized-8a2c4e91": {
+					"type": "stdio",
+					"command": "/home/david/.local/bin/rust-fs-optimized",
+					"args": ["--mode", "mcp"],
+					"env": {
+						"RUST_LOG": "warn"
+					}
+				},
+				"rust-fetch-3d4c8f29": {
+					"type": "stdio",
+					"command": "/home/david/.local/bin/rust-fetch",
+					"args": ["--mode", "mcp"],
+					"env": {
+						"RUST_LOG": "warn"
+					}
+				},
+				"rust-memory-b5e9a7c1": {
+					"type": "stdio",
+					"command": "/home/david/.local/bin/rust-memory",
+					"args": ["--mode", "mcp"],
+					"env": {
+						"RUST_LOG": "warn",
+						"MEMORY_FILE_PATH": "/home/david/agents/workspace-memory.json"
+					}
+				},
+				"rust-bridge-f8d6c4e2": {
+					"type": "stdio",
+					"command": "/home/david/.local/bin/rust-bridge",
+					"args": ["--mode", "mcp"],
+					"env": {
+						"RUST_LOG": "warn"
+					}
+				},
+				"rust-link-a7b3d9f5": {
+					"type": "stdio",
+					"command": "/home/david/.local/bin/rust-link",
+					"args": ["--mode", "mcp"],
+					"env": {
+						"RUST_LOG": "warn"
+					}
+				},
+				"rust-sequential-thinking-c2e8f6a4": {
+					"type": "stdio",
+					"command": "/home/david/.local/bin/rust-sequential-thinking",
+					"args": ["--mode", "mcp"],
+					"env": {
+						"RUST_LOG": "warn"
+					}
+				},
+				"gterminal-mcp-1f2e3d4c": {
+					"type": "stdio",
+					"command": "uv",
+					"args": [
+						"run",
+						"python",
+						"-m",
+						"mcp.server"
+					],
+					"cwd": "/home/david/agents/gterminal",
+					"env": {
+						"PYTHONPATH": "/home/david/agents/gterminal",
+						"GOOGLE_APPLICATION_CREDENTIALS": "/home/david/.auth/business/service-account-key.json",
+						"GOOGLE_CLOUD_PROJECT": "auricleinc-gemini",
+						"GOOGLE_CLOUD_LOCATION": "us-central1",
+						"GOOGLE_GENAI_USE_VERTEXAI": "true",
+						"GCP_AUTH_PROFILE": "business",
+						"GCP_AUTH_ACCOUNT": "david.martel@auricleinc.com"
+					},
+					"timeout": 60000
+				},
+				"py-gemini-mcp-5a6b7c8d": {
+					"type": "stdio",
+					"command": "uv",
+					"args": [
+						"run",
+						"python",
+						"-m",
+						"shared.core.mcp.server"
+					],
+					"cwd": "/home/david/agents/py-gemini",
+					"env": {
+						"PYTHONPATH": "/home/david/agents/py-gemini",
+						"GOOGLE_APPLICATION_CREDENTIALS": "/home/david/.auth/business/service-account-key.json",
+						"GOOGLE_CLOUD_PROJECT": "auricleinc-gemini",
+						"GOOGLE_CLOUD_LOCATION": "us-central1",
+						"GOOGLE_GENAI_USE_VERTEXAI": "true",
+						"GCP_AUTH_PROFILE": "business",
+						"GCP_AUTH_ACCOUNT": "david.martel@auricleinc.com"
+					},
+					"timeout": 60000
+				},
+				"gapp-mcp-9e0f1a2b": {
+					"type": "stdio",
+					"command": "uv",
+					"args": [
+						"run",
+						"python",
+						"-m",
+						"core.mcp.server"
+					],
+					"cwd": "/home/david/agents/gapp",
+					"env": {
+						"PYTHONPATH": "/home/david/agents/gapp",
+						"GOOGLE_APPLICATION_CREDENTIALS": "/home/david/.auth/business/service-account-key.json",
+						"GOOGLE_CLOUD_PROJECT": "auricleinc-gemini",
+						"GOOGLE_CLOUD_LOCATION": "us-central1",
+						"GOOGLE_GENAI_USE_VERTEXAI": "true",
+						"GCP_AUTH_PROFILE": "business",
+						"GCP_AUTH_ACCOUNT": "david.martel@auricleinc.com"
+					},
+					"timeout": 60000
+				},
+				"unified-mcp-3c4d5e6f": {
+					"type": "stdio",
+					"command": "uv",
+					"args": [
+						"run",
+						"python",
+						"-m",
+						"mcp.servers.unified_mcp_manager"
+					],
+					"cwd": "/home/david/agents/unified-gapp-gterminal",
+					"env": {
+						"PYTHONPATH": "/home/david/agents/unified-gapp-gterminal",
+						"GOOGLE_APPLICATION_CREDENTIALS": "/home/david/.auth/business/service-account-key.json",
+						"GOOGLE_CLOUD_PROJECT": "auricleinc-gemini",
+						"GOOGLE_CLOUD_LOCATION": "us-central1",
+						"GOOGLE_GENAI_USE_VERTEXAI": "true",
+						"GCP_AUTH_PROFILE": "business",
+						"GCP_AUTH_ACCOUNT": "david.martel@auricleinc.com"
+					},
+					"timeout": 60000
+				}
+			},
+			"inputs": []
+		}
+	}
+}

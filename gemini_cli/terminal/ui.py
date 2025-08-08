@@ -7,13 +7,18 @@ from typing import Any
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.auto_suggest import AutoSuggestFromHistory
-from prompt_toolkit.completion import PathCompleter, WordCompleter, merge_completers
+from prompt_toolkit.completion import Completer
+from prompt_toolkit.completion import PathCompleter
+from prompt_toolkit.completion import WordCompleter
+from prompt_toolkit.completion import merge_completers
 from prompt_toolkit.history import FileHistory
 from prompt_toolkit.styles import Style
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
-from rich.progress import Progress, SpinnerColumn, TextColumn
+from rich.progress import Progress
+from rich.progress import SpinnerColumn
+from rich.progress import TextColumn
 from rich.syntax import Syntax
 
 from ..core.react_engine import SimpleReactEngine
@@ -30,7 +35,7 @@ class GeminiTerminal:
         self.engine = SimpleReactEngine()
 
         # Initialize prompt session
-        self.session = PromptSession(
+        self.session: PromptSession[str] = PromptSession(
             history=FileHistory(".gemini_cli_history"),
             auto_suggest=AutoSuggestFromHistory(),
             completer=self._create_completer(),
@@ -39,7 +44,7 @@ class GeminiTerminal:
 
         self._running = False
 
-    def _create_completer(self):
+    def _create_completer(self) -> Completer:
         """Create command completer with file paths."""
         commands = [
             # Analysis commands
@@ -252,7 +257,7 @@ complex requests into actions using available tools.
         try:
             if Path(GeminiAuth.BUSINESS_ACCOUNT_PATH).exists():
                 auth_status = "✅ Business account configured"
-        except Exception:
+        except OSError:
             pass
 
         # Check tools
@@ -327,7 +332,7 @@ complex requests into actions using available tools.
                     self._show_execution_summary(summary)
 
             except Exception as e:
-                logger.error(f"Request processing failed: {e}")
+                logger.exception(f"Request processing failed: {e}")
                 self.console.print(f"[red]Error: {e}[/red]")
 
     def _show_response(self, response: str) -> None:
@@ -345,7 +350,7 @@ complex requests into actions using available tools.
                     title="[bold green]Response[/bold green]",
                     border_style="green",
                 )
-            except Exception:
+            except (ValueError, TypeError):
                 # Fallback to markdown
                 panel = Panel(
                     Markdown(response),

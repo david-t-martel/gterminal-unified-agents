@@ -1,0 +1,304 @@
+name: Advanced Security Scanning
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: "0 0 * * 0" # Weekly on Sunday
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write
+  actions: read
+
+jobs:
+  # Code scanning with CodeQL
+  codeql:
+    name: CodeQL Analysis
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        language: ["python"]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+          queries: security-and-quality
+
+      - name: Autobuild
+        uses: github/codeql-action/autobuild@v3
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:${{ matrix.language }}"
+
+  # Python security scanning
+  python-security:
+    name: Python Security Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install UV
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: "0.8.0"
+
+      - name: Install dependencies
+        run: |
+          uv sync --extra dev
+          uv pip install safety bandit pip-audit semgrep
+
+      - name: Run Bandit
+        run: |
+          uv run bandit -r gemini_cli -f json -o bandit-report.json -ll
+          uv run bandit -r gemini_cli -f txt -o bandit-report.txt -ll
+
+      - name: Run Safety check
+        run: |
+          uv run safety check --json --output safety-report.json || true
+          uv run safety check || true
+
+      - name: Run pip-audit
+        run: |
+          uv run pip-audit --desc --format json --output pip-audit-report.json || true
+          uv run pip-audit --desc || true
+
+      - name: Run Semgrep
+        uses: returntocorp/semgrep-action@v1
+        with:
+          config: >-
+            p/python
+            p/security-audit
+            p/secrets
+            p/owasp-top-ten
+
+      - name: Upload security reports
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: python-security-reports
+          path: |
+            bandit-report.*
+            safety-report.json
+            pip-audit-report.json
+
+  # Container scanning
+  container-scan:
+    name: Container Security Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build Docker image
+        run: |
+          docker build -t gterminal:scan .
+
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: "gterminal:scan"
+          format: "sarif"
+          output: "trivy-results.sarif"
+          severity: "CRITICAL,HIGH,MEDIUM"
+          vuln-type: "os,library"
+
+      - name: Upload Trivy scan results
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: "trivy-results.sarif"
+
+      - name: Run Hadolint
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: Dockerfile
+          format: sarif
+          output-file: hadolint-results.sarif
+
+      - name: Upload Hadolint results
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: hadolint-results.sarif
+
+  # Dependency scanning
+  dependency-scan:
+    name: Dependency Security Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run OWASP Dependency Check
+        uses: dependency-check/Dependency-Check_Action@main
+        with:
+          project: "GTerminal ReAct Agent"
+          path: "."
+          format: "ALL"
+          args: >
+            --enableRetired
+            --enableExperimental
+            --failOnCVSS 7
+
+      - name: Upload dependency check results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: dependency-check-report
+          path: reports/
+
+  # License scanning
+  license-scan:
+    name: License Compliance Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install UV
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: "0.8.0"
+
+      - name: Install dependencies
+        run: |
+          uv sync --extra dev
+          uv pip install pip-licenses licensecheck
+
+      - name: Check Python licenses
+        run: |
+          uv run pip-licenses --with-authors --with-urls --format=json --output-file=python-licenses.json
+          uv run pip-licenses --fail-on="GPL;LGPL"
+
+      - name: Upload license reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: license-reports
+          path: |
+            python-licenses.json
+
+  # Secret scanning
+  secret-scan:
+    name: Secret Scanning
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run Gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run TruffleHog
+        uses: trufflesecurity/trufflehog@main
+        with:
+          path: ./
+          base: ${{ github.event.repository.default_branch }}
+          head: HEAD
+
+  # Infrastructure scanning
+  infrastructure-scan:
+    name: Infrastructure Security Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Kubernetes manifest scan
+        uses: bridgecrewio/checkov-action@master
+        with:
+          directory: deployment/kubernetes
+          quiet: true
+          soft_fail: false
+          framework: kubernetes
+          output_format: sarif
+          output_file_path: checkov-k8s.sarif
+
+      - name: Upload K8s scan results
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: checkov-k8s.sarif
+
+      - name: Docker configuration scan
+        uses: bridgecrewio/checkov-action@master
+        with:
+          directory: .
+          quiet: true
+          soft_fail: false
+          framework: dockerfile
+          output_format: sarif
+          output_file_path: checkov-docker.sarif
+
+      - name: Upload Docker scan results
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: checkov-docker.sarif
+
+  # Security report summary
+  security-summary:
+    name: Security Summary
+    needs:
+      [
+        codeql,
+        python-security,
+        container-scan,
+        dependency-scan,
+        license-scan,
+        secret-scan,
+        infrastructure-scan,
+      ]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+
+      - name: Generate security report
+        run: |
+          echo "# Security Scan Summary" > security-summary.md
+          echo "" >> security-summary.md
+          echo "## Scan Results" >> security-summary.md
+          echo "" >> security-summary.md
+          echo "| Scan Type | Status |" >> security-summary.md
+          echo "|-----------|--------|" >> security-summary.md
+          echo "| CodeQL | ${{ needs.codeql.result }} |" >> security-summary.md
+          echo "| Python Security | ${{ needs.python-security.result }} |" >> security-summary.md
+          echo "| Container Scan | ${{ needs.container-scan.result }} |" >> security-summary.md
+          echo "| Dependency Scan | ${{ needs.dependency-scan.result }} |" >> security-summary.md
+          echo "| License Scan | ${{ needs.license-scan.result }} |" >> security-summary.md
+          echo "| Secret Scan | ${{ needs.secret-scan.result }} |" >> security-summary.md
+          echo "| Infrastructure Scan | ${{ needs.infrastructure-scan.result }} |" >> security-summary.md
+
+      - name: Comment PR with security summary
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const summary = fs.readFileSync('security-summary.md', 'utf8');
+
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: summary
+            });

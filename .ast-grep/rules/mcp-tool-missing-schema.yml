@@ -1,0 +1,14 @@
+id: mcp-tool-missing-schema
+message: "# FIXME: MCP tool '$TOOL' missing proper schema definition"
+severity: error
+language: python
+rule:
+  pattern: |
+    @mcp.tool()
+    def $TOOL($$$PARAMS):
+        $$$BODY
+  constraints:
+    BODY:
+      not:
+        has:
+          pattern: '"""$DOCSTRING"""'

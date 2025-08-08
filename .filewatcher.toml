@@ -1,0 +1,107 @@
+# gterminal project filewatcher configuration
+
+[watch]
+extensions = ["py", "ts", "tsx", "js", "jsx", "rs", "json", "yaml", "yml", "toml"]
+ignore_dirs = [
+    "node_modules", "target", "__pycache__", ".git", ".venv", "venv",
+    "dist", "build", ".mypy_cache", ".pytest_cache", ".ruff_cache",
+    "htmlcov", ".coverage", "gterminal_rust_extensions/target"
+]
+ignore_patterns = ["*.pyc", "*.pyo", "*.log", "*.tmp", "*~", ".DS_Store"]
+debounce_ms = 50  # Fast response for development
+recursive = true
+
+[server]
+host = "127.0.0.1"
+http_port = 8767
+websocket_port = 8768
+cors_enabled = true
+request_timeout = 30
+
+[performance]
+max_parallel_jobs = 8
+batch_size = 10
+process_interval_ms = 50
+cache_size = 1000
+memory_optimization = true
+
+[integration]
+rufft_claude_script = "scripts/rufft-claude.sh"
+dashboard_status_file = "dashboard_status.json"
+mcp_enabled = true
+notifications_enabled = true
+webhooks = []
+
+[integration.mcp]
+name = "gterminal-filewatcher"
+version = "2024-11-05"
+exposed_tools = ["analyze", "fix", "status"]
+
+# Python tools configuration
+[tools.ruff]
+executable = "ruff"
+args = ["check", "--output-format", "json"]
+extensions = ["py"]
+auto_fix = true
+priority = 1
+timeout = 30
+
+[tools.ruff-format]
+executable = "ruff"
+args = ["format"]
+extensions = ["py"]
+auto_fix = true
+priority = 2
+timeout = 30
+
+[tools.mypy]
+executable = "mypy"
+args = ["--show-error-codes", "--no-error-summary"]
+extensions = ["py"]
+auto_fix = false
+priority = 3
+timeout = 60
+
+# Universal tools
+[tools.ast-grep]
+executable = "ast-grep"
+args = ["scan", "--json"]
+extensions = ["py", "js", "ts", "rs"]
+auto_fix = true
+priority = 0
+timeout = 30
+
+# JavaScript/TypeScript tools
+[tools.biome]
+executable = "biome"
+args = ["format", "--write"]
+extensions = ["js", "jsx", "ts", "tsx", "json"]
+auto_fix = true
+priority = 2
+timeout = 30
+
+[tools.tsc]
+executable = "npx"
+args = ["tsc", "--noEmit"]
+extensions = ["ts", "tsx"]
+auto_fix = false
+priority = 1
+timeout = 60
+
+# Rust tools
+[tools.clippy]
+executable = "cargo"
+args = ["clippy", "--message-format", "json"]
+extensions = ["rs"]
+auto_fix = true
+priority = 1
+timeout = 60
+working_dir = "gterminal_rust_extensions"
+
+[tools.rustfmt]
+executable = "rustfmt"
+args = []
+extensions = ["rs"]
+auto_fix = true
+priority = 2
+timeout = 30

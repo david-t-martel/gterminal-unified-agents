@@ -1,0 +1,341 @@
+version: "3.8"
+
+services:
+  # ========================
+  # Core GTerminal Service
+  # ========================
+  gterminal-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: gterminal-app
+    ports:
+      - "8080:8000"
+      - "3000:3000"
+    environment:
+      # Google Cloud Configuration
+      GOOGLE_GENAI_USE_VERTEXAI: "${GOOGLE_GENAI_USE_VERTEXAI:-True}"
+      GOOGLE_CLOUD_PROJECT: "${GOOGLE_CLOUD_PROJECT}"
+      GOOGLE_CLOUD_LOCATION: "${GOOGLE_CLOUD_LOCATION:-us-central1}"
+
+      # Application Configuration
+      START_MODE: "${START_MODE:-server}"
+      LOG_LEVEL: "${LOG_LEVEL:-INFO}"
+      MAX_WORKERS: "${MAX_WORKERS:-4}"
+      WORKER_TIMEOUT: "${WORKER_TIMEOUT:-300}"
+
+      # MCP Configuration
+      MCP_PORT: "3000"
+      MCP_LOG_LEVEL: "${MCP_LOG_LEVEL:-INFO}"
+
+      # Database Configuration
+      DATABASE_URL: "${DATABASE_URL:-sqlite:///data/gterminal.db}"
+      REDIS_URL: "redis://redis:6379"
+
+      # Security Configuration
+      JWT_SECRET_KEY: "${JWT_SECRET_KEY}"
+      JWT_ALGORITHM: "${JWT_ALGORITHM:-HS256}"
+      JWT_EXPIRATION_TIME: "${JWT_EXPIRATION_TIME:-3600}"
+
+      # Performance Configuration
+      REACT_CACHE_SIZE: "${REACT_CACHE_SIZE:-1000}"
+      GEMINI_RATE_LIMIT: "${GEMINI_RATE_LIMIT:-60}"
+
+      # Authentication (Profile-based)
+      GCP_PROFILE: "${GCP_PROFILE:-business}"
+      GOOGLE_APPLICATION_CREDENTIALS: "/app/service-account.json"
+
+    volumes:
+      - gterminal_data:/data
+      - gterminal_logs:/logs
+      - gterminal_config:/config
+      # Mount service account key if using service account auth
+      - "${GOOGLE_APPLICATION_CREDENTIALS:-/dev/null}:/app/service-account.json:ro"
+    depends_on:
+      - redis
+      - postgres
+    networks:
+      - gterminal_network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "/app/healthcheck.py"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+          cpus: "2.0"
+        reservations:
+          memory: 2G
+          cpus: "1.0"
+
+  # ========================
+  # MCP Server Service
+  # ========================
+  gterminal-mcp:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: gterminal-mcp
+    ports:
+      - "3001:3000"
+    environment:
+      START_MODE: "mcp"
+      MCP_PORT: "3000"
+      LOG_LEVEL: "${MCP_LOG_LEVEL:-INFO}"
+      REDIS_URL: "redis://redis:6379"
+      DATABASE_URL: "${DATABASE_URL:-sqlite:///data/mcp.db}"
+    volumes:
+      - gterminal_mcp_data:/data
+      - gterminal_logs:/logs
+    depends_on:
+      - redis
+    networks:
+      - gterminal_network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # ========================
+  # ReAct Agent Service
+  # ========================
+  gterminal-react:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: gterminal-react
+    ports:
+      - "8081:8000"
+    environment:
+      START_MODE: "react"
+      PORT: "8000"
+      LOG_LEVEL: "${LOG_LEVEL:-INFO}"
+      REDIS_URL: "redis://redis:6379"
+
+      # ReAct specific configuration
+      MAX_REASONING_STEPS: "${MAX_REASONING_STEPS:-10}"
+      REASONING_TIMEOUT: "${REASONING_TIMEOUT:-120}"
+      ENABLE_TOOL_CACHING: "${ENABLE_TOOL_CACHING:-true}"
+    volumes:
+      - gterminal_react_data:/data
+      - gterminal_logs:/logs
+    depends_on:
+      - redis
+    networks:
+      - gterminal_network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "/app/healthcheck.py"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # ========================
+  # Redis Cache Service
+  # ========================
+  redis:
+    image: redis:7-alpine
+    container_name: gterminal-redis
+    ports:
+      - "6379:6379"
+    command: >
+      redis-server
+      --appendonly yes
+      --appendfsync everysec
+      --maxmemory 1g
+      --maxmemory-policy allkeys-lru
+      --save 300 1
+      ${REDIS_PASSWORD:+--requirepass $REDIS_PASSWORD}
+    volumes:
+      - redis_data:/data
+    networks:
+      - gterminal_network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: "0.5"
+
+  # ========================
+  # PostgreSQL Database Service
+  # ========================
+  postgres:
+    image: postgres:15-alpine
+    container_name: gterminal-postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: "${POSTGRES_DB:-gterminal}"
+      POSTGRES_USER: "${POSTGRES_USER:-gterminal}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-secure_password}"
+      POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./scripts/init-db.sql:/docker-entrypoint-initdb.d/init-db.sql:ro
+    networks:
+      - gterminal_network
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${POSTGRES_USER:-gterminal} -d ${POSTGRES_DB:-gterminal}",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: "1.0"
+
+  # ========================
+  # Monitoring Stack
+  # ========================
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: gterminal-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/gterminal-rules.yml:/etc/prometheus/rules/gterminal.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--web.console.libraries=/etc/prometheus/console_libraries"
+      - "--web.console.templates=/etc/prometheus/consoles"
+      - "--storage.tsdb.retention.time=15d"
+      - "--web.enable-lifecycle"
+      - "--web.enable-admin-api"
+    networks:
+      - gterminal_network
+    restart: unless-stopped
+    depends_on:
+      - gterminal-app
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: gterminal-grafana
+    ports:
+      - "3003:3000"
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: "${GRAFANA_PASSWORD:-admin}"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_INSTALL_PLUGINS: "grafana-piechart-panel,grafana-clock-panel"
+    volumes:
+      - ./monitoring/dashboards/:/var/lib/grafana/dashboards/:ro
+      - ./monitoring/provisioning/:/etc/grafana/provisioning/:ro
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      - prometheus
+    networks:
+      - gterminal_network
+    restart: unless-stopped
+
+  # ========================
+  # Load Balancer (Nginx)
+  # ========================
+  nginx:
+    image: nginx:alpine
+    container_name: gterminal-nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/ssl/:/etc/nginx/ssl/:ro
+    depends_on:
+      - gterminal-app
+      - gterminal-react
+    networks:
+      - gterminal_network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # ========================
+  # Development Override
+  # ========================
+  # Development service for hot reloading
+  gterminal-dev:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: builder
+    container_name: gterminal-dev
+    ports:
+      - "8082:8000"
+    environment:
+      PYTHONPATH: "/app"
+      DEVELOPMENT_MODE: "true"
+      LOG_LEVEL: "DEBUG"
+      HOT_RELOAD: "true"
+    volumes:
+      - .:/app
+      - gterminal_dev_data:/data
+    networks:
+      - gterminal_network
+    profiles: ["dev"]
+    command: >
+      sh -c "
+        . /opt/venv/bin/activate &&
+        pip install -e . &&
+        python -m gterminal.server --reload --host 0.0.0.0 --port 8000
+      "
+
+# ========================
+# Networks and Volumes
+# ========================
+networks:
+  gterminal_network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.21.0.0/16
+
+volumes:
+  # Application data volumes
+  gterminal_data:
+    driver: local
+  gterminal_mcp_data:
+    driver: local
+  gterminal_react_data:
+    driver: local
+  gterminal_dev_data:
+    driver: local
+
+  # Logs and configuration
+  gterminal_logs:
+    driver: local
+  gterminal_config:
+    driver: local
+
+  # Database volumes
+  redis_data:
+    driver: local
+  postgres_data:
+    driver: local
+
+  # Monitoring volumes
+  prometheus_data:
+    driver: local
+  grafana_data:
+    driver: local

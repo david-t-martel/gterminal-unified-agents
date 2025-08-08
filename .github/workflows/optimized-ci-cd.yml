@@ -1,0 +1,442 @@
+name: Optimized CI/CD Pipeline with Caching
+
+on:
+  push:
+    branches: [main, develop, "feat/**", "fix/**"]
+  pull_request:
+    branches: [main, develop]
+  release:
+    types: [published]
+
+env:
+  PYTHON_VERSION: "3.12"
+  UV_VERSION: "0.8.0"
+  REGISTRY_URL: gcr.io
+  PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+  CLUSTER_NAME: gterminal-cluster
+  REGION: us-central1
+
+# Global cache configuration
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # =============================================
+  # Stage 1: Quality & Security (Parallel)
+  # =============================================
+  code-quality:
+    name: Code Quality & Linting
+    runs-on: ubuntu-latest
+    outputs:
+      python-cache-key: ${{ steps.cache-keys.outputs.python }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1 # Shallow clone for speed
+
+      - name: Generate cache keys
+        id: cache-keys
+        run: |
+          echo "python=${{ hashFiles('**/pyproject.toml', '**/uv.lock') }}" >> $GITHUB_OUTPUT
+
+      - name: Setup Python with cache
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: "pip"
+
+      - name: Cache uv and virtual environment
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/uv
+            .venv
+          key: uv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ steps.cache-keys.outputs.python }}
+          restore-keys: |
+            uv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-
+
+      - name: Install UV
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: ${{ env.UV_VERSION }}
+
+      - name: Install dependencies
+        run: |
+          uv sync --extra dev --extra quality
+
+      - name: Run linting (parallel)
+        run: |
+          uv run ruff check . --output-format=github &
+          uv run ruff format --check . &
+          uv run mypy gemini_cli --no-error-summary --show-error-codes &
+          wait
+
+      - name: Upload lint results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lint-results
+          path: .mypy_cache/
+          retention-days: 1
+
+  security-scan:
+    name: Security Analysis
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run Trivy filesystem scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: "fs"
+          scan-ref: "."
+          format: "sarif"
+          output: "trivy-results.sarif"
+          severity: "CRITICAL,HIGH,MEDIUM"
+          exit-code: "0" # Don't fail on vulnerabilities
+
+      - name: Upload Trivy results
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: "trivy-results.sarif"
+
+      - name: Run Semgrep
+        uses: returntocorp/semgrep-action@v1
+        with:
+          config: p/security-audit
+
+  # =============================================
+  # Stage 2: Testing (Matrix Strategy)
+  # =============================================
+  test-backend:
+    name: Backend Tests
+    runs-on: ubuntu-latest
+    needs: code-quality
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: [unit, integration, mcp]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python with cache
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: "pip"
+
+      - name: Restore uv cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/uv
+            .venv
+          key: uv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ needs.code-quality.outputs.python-cache-key }}
+
+      - name: Install UV
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: ${{ env.UV_VERSION }}
+
+      - name: Install dependencies
+        run: |
+          uv sync --extra dev --extra test --extra mcp
+
+      - name: Run tests with coverage
+        run: |
+          case "${{ matrix.test-group }}" in
+            unit)
+              uv run pytest tests/ --cov=gemini_cli --cov-report=xml:coverage-unit.xml --junit-xml=junit-unit.xml -q -m "unit or not (integration or e2e or mcp)"
+              ;;
+            integration)
+              uv run pytest tests/ --junit-xml=junit-integration.xml -q -m "integration"
+              ;;
+            mcp)
+              uv run pytest tests/ --junit-xml=junit-mcp.xml -q -m "mcp"
+              # Run MCP validation scripts
+              python3 scripts/validate-mcp-config.py
+              python3 scripts/validate-mcp-servers.py
+              ;;
+          esac
+
+      - name: Upload coverage reports
+        if: matrix.test-group == 'unit'
+        uses: codecov/codecov-action@v4
+        with:
+          files: ./coverage-unit.xml
+          flags: unittests
+          fail_ci_if_error: false
+
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-results-${{ matrix.test-group }}
+          path: junit-*.xml
+          retention-days: 30
+
+  # =============================================
+  # Stage 3: Rust Extensions Build
+  # =============================================
+  rust-build:
+    name: Rust Extensions
+    runs-on: ubuntu-latest
+    needs: code-quality
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            gterminal_rust_extensions/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('gterminal_rust_extensions/Cargo.lock') }}
+
+      - name: Build Rust extensions
+        working-directory: gterminal_rust_extensions
+        run: |
+          cargo build --release
+          cargo test
+          cargo clippy -- -D warnings
+
+      - name: Cache build artifacts
+        uses: actions/cache@v4
+        with:
+          path: gterminal_rust_extensions/target/release/
+          key: rust-build-${{ github.sha }}
+
+  # =============================================
+  # Stage 4: Container Build & Registry
+  # =============================================
+  build-and-push:
+    name: Build & Push Container
+    runs-on: ubuntu-latest
+    needs: [code-quality, test-backend, rust-build, security-scan]
+    if: github.event_name == 'push' || github.event_name == 'release'
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      image-digest: ${{ steps.build.outputs.digest }}
+      image-tag: ${{ steps.meta.outputs.tags }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          driver-opts: |
+            network=host
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY_URL }}
+          username: _json_key
+          password: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY_URL }}/${{ env.PROJECT_ID }}/gterminal
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha,prefix={{branch}}-
+
+      - name: Build and push Docker image
+        id: build
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: |
+            type=gha
+            type=registry,ref=${{ env.REGISTRY_URL }}/${{ env.PROJECT_ID }}/gterminal:buildcache
+          cache-to: |
+            type=gha,mode=max
+            type=registry,ref=${{ env.REGISTRY_URL }}/${{ env.PROJECT_ID }}/gterminal:buildcache,mode=max
+          build-args: |
+            BUILD_DATE=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.created'] }}
+            VERSION=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.version'] }}
+            VCS_REF=${{ github.sha }}
+
+      - name: Generate SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          image: ${{ env.REGISTRY_URL }}/${{ env.PROJECT_ID }}/gterminal@${{ steps.build.outputs.digest }}
+          format: spdx-json
+          output-file: sbom.spdx.json
+
+      - name: Upload SBOM
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom
+          path: sbom.spdx.json
+
+  # =============================================
+  # Stage 5: Deployment (Environment-based)
+  # =============================================
+  deploy-staging:
+    name: Deploy to Staging
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/develop'
+    environment:
+      name: staging
+      url: https://staging-gterminal.example.com
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.GCP_SA_EMAIL }}
+
+      - name: Set up GKE credentials
+        uses: google-github-actions/get-gke-credentials@v2
+        with:
+          cluster_name: ${{ env.CLUSTER_NAME }}-staging
+          location: ${{ env.REGION }}
+
+      - name: Deploy with Helm
+        run: |
+          helm upgrade --install gterminal ./deployment/helm/gterminal \
+            --namespace staging \
+            --create-namespace \
+            --set image.repository=${{ env.REGISTRY_URL }}/${{ env.PROJECT_ID }}/gterminal \
+            --set image.tag=${{ github.sha }} \
+            --set environment=staging \
+            --set replicas=2 \
+            --set resources.requests.cpu=500m \
+            --set resources.requests.memory=1Gi \
+            --set resources.limits.cpu=1000m \
+            --set resources.limits.memory=2Gi \
+            --wait --timeout=5m
+
+      - name: Run smoke tests
+        run: |
+          kubectl wait --for=condition=ready pod -l app=gterminal -n staging --timeout=300s
+          curl -f https://staging-gterminal.example.com/health
+
+  deploy-production:
+    name: Deploy to Production (Blue-Green)
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    if: github.event_name == 'release'
+    environment:
+      name: production
+      url: https://gterminal.example.com
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.GCP_SA_EMAIL }}
+
+      - name: Set up GKE credentials
+        uses: google-github-actions/get-gke-credentials@v2
+        with:
+          cluster_name: ${{ env.CLUSTER_NAME }}
+          location: ${{ env.REGION }}
+
+      - name: Blue-Green Deployment
+        run: |
+          # Deploy to green environment
+          helm upgrade --install gterminal-green ./deployment/helm/gterminal \
+            --namespace production \
+            --create-namespace \
+            --set image.repository=${{ env.REGISTRY_URL }}/${{ env.PROJECT_ID }}/gterminal \
+            --set image.tag=${{ github.sha }} \
+            --set environment=production \
+            --set deployment.suffix=green \
+            --set service.selector.version=green \
+            --set replicas=3 \
+            --wait --timeout=10m
+
+          # Health check green deployment
+          kubectl wait --for=condition=ready pod -l app=gterminal,version=green -n production --timeout=300s
+
+          # Switch traffic to green
+          kubectl patch service gterminal -n production \
+            -p '{"spec":{"selector":{"version":"green"}}}'
+
+          # Wait and verify
+          sleep 30
+          curl -f https://gterminal.example.com/health
+
+          # Clean up old blue deployment
+          helm uninstall gterminal-blue -n production || true
+
+      - name: Notify deployment success
+        uses: 8398a7/action-slack@v3
+        with:
+          status: success
+          text: "🚀 Production deployment successful - Version: ${{ github.sha }}"
+          webhook_url: ${{ secrets.SLACK_WEBHOOK }}
+
+  # =============================================
+  # Stage 6: Post-Deployment Monitoring
+  # =============================================
+  post-deploy-validation:
+    name: Post-Deployment Validation
+    needs: [deploy-staging, deploy-production]
+    runs-on: ubuntu-latest
+    if: always() && (needs.deploy-staging.result == 'success' || needs.deploy-production.result == 'success')
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Load testing
+        run: |
+          # Install k6 for load testing
+          curl https://github.com/grafana/k6/releases/download/v0.47.0/k6-v0.47.0-linux-amd64.tar.gz -L | tar xvz --strip-components 1
+
+          # Run load test
+          ./k6 run --duration 2m --vus 10 scripts/load-test.js
+
+      - name: SLO validation
+        run: |
+          pip install google-cloud-monitoring
+          python scripts/validate_slos.py --project ${{ env.PROJECT_ID }}
+
+  # =============================================
+  # Cleanup job for cache management
+  # =============================================
+  cleanup:
+    name: Cleanup old artifacts
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Delete old workflow runs
+        uses: Mattraks/delete-workflow-runs@v2
+        with:
+          token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          retain_days: 30
+          keep_minimum_runs: 10

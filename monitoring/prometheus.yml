@@ -1,0 +1,157 @@
+# Prometheus configuration for GTerminal monitoring
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    cluster: "gterminal-cluster"
+    environment: "${ENVIRONMENT:-development}"
+
+# Alertmanager configuration
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+            - "alertmanager:9093"
+
+# Rules for alerting
+rule_files:
+  - "/etc/prometheus/rules/gterminal-rules.yml"
+
+# Scrape configurations
+scrape_configs:
+  # GTerminal main application
+  - job_name: "gterminal-app"
+    static_configs:
+      - targets: ["gterminal-app:8080"]
+    metrics_path: "/metrics"
+    scrape_interval: 15s
+    scrape_timeout: 10s
+    params:
+      format: ["prometheus"]
+
+  # GTerminal ReAct agent
+  - job_name: "gterminal-react"
+    static_configs:
+      - targets: ["gterminal-react:8081"]
+    metrics_path: "/metrics"
+    scrape_interval: 15s
+
+  # MCP servers
+  - job_name: "gterminal-mcp"
+    static_configs:
+      - targets:
+          - "gterminal-mcp:3000"
+          - "gterminal-mcp:3001"
+          - "gterminal-mcp:3002"
+          - "gterminal-mcp:3003"
+    metrics_path: "/metrics"
+    scrape_interval: 30s
+
+  # Redis cache
+  - job_name: "redis"
+    static_configs:
+      - targets: ["redis:6379"]
+    scrape_interval: 30s
+
+  # PostgreSQL database
+  - job_name: "postgres"
+    static_configs:
+      - targets: ["postgres-exporter:9187"]
+    scrape_interval: 30s
+
+  # Node exporter for system metrics
+  - job_name: "node-exporter"
+    static_configs:
+      - targets: ["node-exporter:9100"]
+    scrape_interval: 15s
+
+  # Container metrics (if using Docker)
+  - job_name: "cadvisor"
+    static_configs:
+      - targets: ["cadvisor:8080"]
+    scrape_interval: 15s
+
+  # Nginx load balancer
+  - job_name: "nginx"
+    static_configs:
+      - targets: ["nginx:9113"]
+    scrape_interval: 30s
+
+  # Kubernetes metrics (if deployed on K8s)
+  - job_name: "kubernetes-apiservers"
+    kubernetes_sd_configs:
+      - role: endpoints
+    scheme: https
+    tls_config:
+      ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+      insecure_skip_verify: true
+    bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+    relabel_configs:
+      - source_labels:
+          [
+            __meta_kubernetes_namespace,
+            __meta_kubernetes_service_name,
+            __meta_kubernetes_endpoint_port_name,
+          ]
+        action: keep
+        regex: default;kubernetes;https
+
+  - job_name: "kubernetes-nodes"
+    kubernetes_sd_configs:
+      - role: node
+    scheme: https
+    tls_config:
+      ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+      insecure_skip_verify: true
+    bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+    relabel_configs:
+      - action: labelmap
+        regex: __meta_kubernetes_node_label_(.+)
+      - target_label: __address__
+        replacement: kubernetes.default.svc:443
+      - source_labels: [__meta_kubernetes_node_name]
+        regex: (.+)
+        target_label: __metrics_path__
+        replacement: /api/v1/nodes/${1}/proxy/metrics
+
+  - job_name: "kubernetes-pods"
+    kubernetes_sd_configs:
+      - role: pod
+    relabel_configs:
+      - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+        action: keep
+        regex: true
+      - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_path]
+        action: replace
+        target_label: __metrics_path__
+        regex: (.+)
+      - source_labels:
+          [__address__, __meta_kubernetes_pod_annotation_prometheus_io_port]
+        action: replace
+        regex: ([^:]+)(?::\d+)?;(\d+)
+        replacement: $1:$2
+        target_label: __address__
+      - action: labelmap
+        regex: __meta_kubernetes_pod_label_(.+)
+      - source_labels: [__meta_kubernetes_namespace]
+        action: replace
+        target_label: kubernetes_namespace
+      - source_labels: [__meta_kubernetes_pod_name]
+        action: replace
+        target_label: kubernetes_pod_name
+
+# Remote write for long-term storage (Google Cloud)
+remote_write:
+  - url: "https://monitoring.googleapis.com/v1/projects/${GOOGLE_CLOUD_PROJECT}/metrics/prometheus/write"
+    queue_config:
+      capacity: 2500
+      max_shards: 200
+      min_shards: 1
+      max_samples_per_send: 1000
+      batch_send_deadline: 5s
+      min_backoff: 30ms
+      max_backoff: 100ms
+    write_relabel_configs:
+      - source_labels: [__name__]
+        regex: "gterminal_.*"
+        action: keep

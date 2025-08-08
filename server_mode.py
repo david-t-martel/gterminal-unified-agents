@@ -5,14 +5,22 @@ This creates a background server that can run autonomously and accept
 function calls via MCP or HTTP API for continuous processing.
 """
 
+import argparse
 import asyncio
+from datetime import datetime
 import logging
 import signal
 import sys
-from datetime import datetime
 from typing import Any
 
 from gemini_cli.core.react_engine import SimpleReactEngine
+
+try:
+    from aiohttp import web
+    from aiohttp import web_request
+except ImportError:
+    web = None
+    web_request = None
 
 # Configure logging
 logging.basicConfig(
@@ -43,7 +51,7 @@ class GTerminalReactServer:
 
         logger.info(f"🚀 GTerminal ReAct Server initialized - Session: {self.session_id}")
 
-    def _signal_handler(self, signum, frame):
+    def _signal_handler(self, signum, _frame):
         """Handle shutdown signals gracefully."""
         logger.info(f"Received signal {signum}, shutting down...")
         self.is_running = False
@@ -90,19 +98,19 @@ class GTerminalReactServer:
             self.results_store[request_id] = response
 
             logger.info(f"✅ Completed request {request_id}")
-            return response
-
-        except Exception as e:
+        except Exception:
             error_response = {
                 "id": request_id,
-                "error": str(e),
+                "error": "Request processing failed",
                 "timestamp": datetime.now().isoformat(),
                 "session_id": self.session_id,
                 "status": "error",
             }
 
-            logger.error(f"❌ Request {request_id} failed: {e}")
+            logger.exception(f"❌ Request {request_id} failed")
             return error_response
+        else:
+            return response
 
     async def background_worker(self):
         """Background worker to process queued tasks."""
@@ -123,8 +131,8 @@ class GTerminalReactServer:
             except TimeoutError:
                 # No tasks available, continue loop
                 continue
-            except Exception as e:
-                logger.error(f"Background worker error: {e}")
+            except Exception:
+                logger.exception("Background worker error")
                 continue
 
     async def queue_task(self, request_data: dict[str, Any]) -> str:
@@ -171,7 +179,9 @@ class GTerminalReactServer:
 
     async def _start_http_server(self):
         """Start simple HTTP server for API access."""
-        from aiohttp import web, web_request
+        if web is None or web_request is None:
+            logger.warning("aiohttp not available, HTTP server disabled")
+            return
 
         async def handle_process(request: web_request.Request) -> web.Response:
             """Handle process request."""
@@ -179,9 +189,13 @@ class GTerminalReactServer:
                 data = await request.json()
                 result = await self.process_request(data)
                 return web.json_response(result)
-            except Exception as e:
+            except (ValueError, TypeError):
                 return web.json_response(
-                    {"error": str(e), "timestamp": datetime.now().isoformat()}, status=500
+                    {
+                        "error": "Invalid JSON request",
+                        "timestamp": datetime.now().isoformat(),
+                    },
+                    status=400,
                 )
 
         async def handle_queue(request: web_request.Request) -> web.Response:
@@ -196,9 +210,13 @@ class GTerminalReactServer:
                         "timestamp": datetime.now().isoformat(),
                     }
                 )
-            except Exception as e:
+            except (ValueError, TypeError):
                 return web.json_response(
-                    {"error": str(e), "timestamp": datetime.now().isoformat()}, status=500
+                    {
+                        "error": "Invalid JSON request",
+                        "timestamp": datetime.now().isoformat(),
+                    },
+                    status=400,
                 )
 
         async def handle_result(request: web_request.Request) -> web.Response:
@@ -208,12 +226,12 @@ class GTerminalReactServer:
 
             if result:
                 return web.json_response(result)
-            else:
-                return web.json_response(
-                    {"error": "Result not found", "request_id": request_id}, status=404
-                )
 
-        async def handle_status(request: web_request.Request) -> web.Response:
+            return web.json_response(
+                {"error": "Result not found", "request_id": request_id}, status=404
+            )
+
+        async def handle_status(_request: web_request.Request) -> web.Response:
             """Handle status request."""
             return web.json_response(
                 {
@@ -259,7 +277,6 @@ class GTerminalReactServer:
 
 async def main():
     """Main entry point for server mode."""
-    import argparse
 
     parser = argparse.ArgumentParser(description="GTerminal ReAct Background Server")
     parser.add_argument("--port", type=int, default=8765, help="Port to run server on")
@@ -279,8 +296,8 @@ async def main():
         await server.start_server()
     except KeyboardInterrupt:
         logger.info("Server stopped by user")
-    except Exception as e:
-        logger.error(f"Server error: {e}")
+    except Exception:
+        logger.exception("Server error")
         raise
 
 

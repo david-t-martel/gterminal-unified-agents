@@ -1,0 +1,50 @@
+{
+	"// NOTE": "This file contains the original MCP server configuration before Rust optimization",
+	"// Created": "During Rust server validation and cleanup process",
+	"// Purpose": "Backup of non-Rust servers that were replaced by Rust equivalents",
+
+	"deprecated_mcp_servers": {
+		"sequential-thinking-wsl-9b4e7c3a": {
+			"type": "stdio",
+			"command": "npx",
+			"args": ["-y", "@modelcontextprotocol/server-sequential-thinking"],
+			"env": {},
+			"// REPLACED_BY": "rust-sequential-thinking-c2e8f6a4",
+			"// REASON": "Rust implementation provides better performance and reliability"
+		},
+		"wsl-filesystem-d6f8a2b9": {
+			"type": "stdio",
+			"command": "npx",
+			"args": ["-y", "@modelcontextprotocol/server-filesystem", "/home/david/agents"],
+			"env": {
+				"ALLOWED_DIRECTORIES": "/home/david/agents"
+			},
+			"// REPLACED_BY": "rust-fs-server-75bfda66 and rust-fs-optimized-8a2c4e91",
+			"// REASON": "Rust file servers provide superior performance, security, and MCP integration"
+		}
+	},
+
+	"performance_comparison": {
+		"rust_advantages": [
+			"Faster startup times",
+			"Lower memory usage",
+			"Better error handling",
+			"Native MCP protocol support",
+			"Consistent binary availability",
+			"No NPX download delays"
+		],
+		"deprecated_server_issues": [
+			"NPX dependency downloads on first use",
+			"Higher memory footprint",
+			"Slower JSON processing",
+			"Network dependency for package resolution"
+		]
+	},
+
+	"migration_notes": {
+		"file_operations": "All file operations now handled by rust-fs-server-75bfda66 (primary) and rust-fs-optimized-8a2c4e91 (backup)",
+		"sequential_thinking": "AI reasoning capabilities moved to rust-sequential-thinking-c2e8f6a4 with enhanced performance",
+		"tool_compatibility": "All Rust servers provide equivalent or superior functionality to deprecated Node.js servers",
+		"rollback_procedure": "If needed, restore servers from this backup file to workspace configuration"
+	}
+}

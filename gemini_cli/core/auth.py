@@ -1,6 +1,7 @@
 """Business service account authentication only."""
 
 import os
+from pathlib import Path
 
 from google.auth.exceptions import DefaultCredentialsError
 from google.oauth2 import service_account
@@ -14,9 +15,9 @@ class GeminiAuth:
     LOCATION = "us-central1"
 
     @classmethod
-    def get_credentials(cls):
+    def get_credentials(cls) -> tuple[service_account.Credentials, str]:
         """Get business service account credentials only."""
-        if not os.path.exists(cls.BUSINESS_ACCOUNT_PATH):
+        if not Path(cls.BUSINESS_ACCOUNT_PATH).exists():
             raise DefaultCredentialsError(
                 f"Business service account required at {cls.BUSINESS_ACCOUNT_PATH}"
             )
@@ -29,7 +30,7 @@ class GeminiAuth:
         return credentials, cls.PROJECT_ID
 
     @classmethod
-    def setup_environment(cls):
+    def setup_environment(cls) -> None:
         """Setup environment for Vertex AI."""
         os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = cls.BUSINESS_ACCOUNT_PATH
         os.environ["GOOGLE_CLOUD_PROJECT"] = cls.PROJECT_ID

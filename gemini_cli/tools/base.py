@@ -1,6 +1,7 @@
 """Base tool interface for Gemini CLI tools."""
 
-from abc import ABC, abstractmethod
+from abc import ABC
+from abc import abstractmethod
 from typing import Any
 
 

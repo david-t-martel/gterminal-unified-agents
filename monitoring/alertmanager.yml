@@ -1,0 +1,229 @@
+# Alertmanager Configuration
+# Advanced alerting and notification routing
+
+global:
+  smtp_smarthost: "localhost:587"
+  smtp_from: "alerts@gterminal.dev"
+  smtp_auth_username: "alerts@gterminal.dev"
+  smtp_auth_password: "${SMTP_PASSWORD}"
+
+  slack_api_url: "${SLACK_WEBHOOK_URL}"
+
+  # Resolve timeout
+  resolve_timeout: 5m
+
+# Templates for notifications
+templates:
+  - "/etc/alertmanager/templates/*.tmpl"
+
+# Routing tree
+route:
+  # Root route
+  group_by: ["alertname", "cluster", "service"]
+  group_wait: 10s
+  group_interval: 10m
+  repeat_interval: 12h
+  receiver: "default"
+
+  # Specific routing rules
+  routes:
+    # Critical alerts - immediate notification
+    - match:
+        severity: critical
+      receiver: "critical-alerts"
+      group_wait: 10s
+      group_interval: 5m
+      repeat_interval: 5m
+      continue: true
+
+    # Service-specific routing
+    - match:
+        service: rust-filewatcher
+      receiver: "rust-team"
+      group_wait: 30s
+      group_interval: 15m
+
+    - match:
+        service: ruff-lsp
+      receiver: "python-team"
+      group_wait: 30s
+      group_interval: 15m
+
+    - match:
+        service: gterminal-app
+      receiver: "backend-team"
+      group_wait: 30s
+      group_interval: 15m
+
+    - match:
+        category: infrastructure
+      receiver: "ops-team"
+      group_wait: 1m
+      group_interval: 30m
+
+    # Development alerts - lower priority
+    - match:
+        category: development
+      receiver: "dev-team"
+      group_wait: 5m
+      group_interval: 1h
+      repeat_interval: 24h
+
+    # Maintenance window - silence alerts
+    - match:
+        alertname: MaintenanceWindow
+      receiver: "null"
+
+# Inhibition rules - suppress alerts based on other alerts
+inhibit_rules:
+  # Suppress service alerts if the entire service is down
+  - source_match:
+      severity: "critical"
+      alertname: "ServiceDown"
+    target_match_re:
+      service: ".*"
+    equal: ["service"]
+
+  # Suppress specific alerts during maintenance
+  - source_match:
+      alertname: "MaintenanceWindow"
+    target_match_re:
+      severity: ".*"
+    equal: ["instance"]
+
+# Receivers - notification destinations
+receivers:
+  - name: "default"
+    slack_configs:
+      - api_url: "${SLACK_WEBHOOK_URL}"
+        channel: "#gterminal-alerts"
+        title: "🚨 GTerminal Alert"
+        text: |
+          {{ range .Alerts }}
+          *Alert:* {{ .Annotations.summary }}
+          *Description:* {{ .Annotations.description }}
+          *Severity:* {{ .Labels.severity }}
+          *Service:* {{ .Labels.service }}
+          {{ end }}
+        send_resolved: true
+
+  - name: "critical-alerts"
+    # Multiple notification channels for critical alerts
+    slack_configs:
+      - api_url: "${SLACK_WEBHOOK_URL}"
+        channel: "#gterminal-critical"
+        title: "🚨 CRITICAL: GTerminal Alert"
+        text: |
+          {{ range .Alerts }}
+          *CRITICAL ALERT:* {{ .Annotations.summary }}
+          *Description:* {{ .Annotations.description }}
+          *Service:* {{ .Labels.service }}
+          *Instance:* {{ .Labels.instance }}
+          *Runbook:* {{ .Annotations.runbook_url }}
+          {{ end }}
+        send_resolved: true
+
+    email_configs:
+      - to: "oncall@gterminal.dev"
+        subject: "CRITICAL: {{ .GroupLabels.alertname }} in {{ .GroupLabels.service }}"
+        body: |
+          {{ range .Alerts }}
+          Alert: {{ .Annotations.summary }}
+          Description: {{ .Annotations.description }}
+          Service: {{ .Labels.service }}
+          Instance: {{ .Labels.instance }}
+          Severity: {{ .Labels.severity }}
+          Started: {{ .StartsAt }}
+          Runbook: {{ .Annotations.runbook_url }}
+          {{ end }}
+
+    webhook_configs:
+      - url: "http://pagerduty-webhook:8080/webhook"
+        send_resolved: true
+
+  - name: "rust-team"
+    slack_configs:
+      - api_url: "${SLACK_WEBHOOK_URL}"
+        channel: "#rust-team"
+        title: "🦀 Rust Service Alert"
+        text: |
+          {{ range .Alerts }}
+          *Rust Service Alert:* {{ .Annotations.summary }}
+          *Description:* {{ .Annotations.description }}
+          *Service:* {{ .Labels.service }}
+          {{ end }}
+        send_resolved: true
+
+  - name: "python-team"
+    slack_configs:
+      - api_url: "${SLACK_WEBHOOK_URL}"
+        channel: "#python-team"
+        title: "🐍 Python Service Alert"
+        text: |
+          {{ range .Alerts }}
+          *Python Service Alert:* {{ .Annotations.summary }}
+          *Description:* {{ .Annotations.description }}
+          *Service:* {{ .Labels.service }}
+          {{ end }}
+        send_resolved: true
+
+  - name: "backend-team"
+    slack_configs:
+      - api_url: "${SLACK_WEBHOOK_URL}"
+        channel: "#backend-team"
+        title: "⚙️ Backend Service Alert"
+        text: |
+          {{ range .Alerts }}
+          *Backend Alert:* {{ .Annotations.summary }}
+          *Description:* {{ .Annotations.description }}
+          *Service:* {{ .Labels.service }}
+          {{ end }}
+        send_resolved: true
+
+  - name: "ops-team"
+    slack_configs:
+      - api_url: "${SLACK_WEBHOOK_URL}"
+        channel: "#ops-team"
+        title: "🏗️ Infrastructure Alert"
+        text: |
+          {{ range .Alerts }}
+          *Infrastructure Alert:* {{ .Annotations.summary }}
+          *Description:* {{ .Annotations.description }}
+          *Category:* {{ .Labels.category }}
+          {{ end }}
+        send_resolved: true
+
+    email_configs:
+      - to: "ops@gterminal.dev"
+        subject: "Infrastructure Alert: {{ .GroupLabels.alertname }}"
+
+  - name: "dev-team"
+    slack_configs:
+      - api_url: "${SLACK_WEBHOOK_URL}"
+        channel: "#dev-team"
+        title: "💻 Development Alert"
+        text: |
+          {{ range .Alerts }}
+          *Development Alert:* {{ .Annotations.summary }}
+          *Description:* {{ .Annotations.description }}
+          {{ end }}
+        send_resolved: true
+
+  # Null receiver for silenced alerts
+  - name: "null"
+
+# Advanced features
+time_intervals:
+  - name: "business-hours"
+    time_intervals:
+      - times:
+          - start_time: "09:00"
+            end_time: "17:00"
+        weekdays: ["monday:friday"]
+
+  - name: "weekends"
+    time_intervals:
+      - times:
+          - start_time: "00:00"
+            end_time: "23:59"
+        weekdays: ["saturday", "sunday"]

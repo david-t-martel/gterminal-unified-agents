@@ -1,0 +1,305 @@
+# Service Configuration for GTerminal DevOps Stack
+# Defines all integrated Rust and Python services with dependencies
+
+services:
+  # ======================
+  # Core Infrastructure
+  # ======================
+
+  redis:
+    command:
+      [
+        "redis-server",
+        "--appendonly",
+        "yes",
+        "--maxmemory",
+        "1g",
+        "--maxmemory-policy",
+        "allkeys-lru",
+      ]
+    working_dir: "/data"
+    env:
+      REDIS_PORT: "6379"
+    port: 6379
+    health_check_url: "redis://localhost:6379/ping"
+    health_check_interval: 15
+    restart_policy: "always"
+    dependencies: []
+    timeout: 30
+
+  postgres:
+    command: ["postgres", "-D", "/var/lib/postgresql/data"]
+    working_dir: "/var/lib/postgresql/data"
+    env:
+      POSTGRES_DB: "gterminal"
+      POSTGRES_USER: "gterminal"
+      POSTGRES_PASSWORD: "secure_password"
+      PGDATA: "/var/lib/postgresql/data"
+    port: 5432
+    health_check_url: "postgresql://gterminal:secure_password@localhost:5432/gterminal"
+    health_check_interval: 30
+    restart_policy: "always"
+    dependencies: []
+    timeout: 60
+
+  # ======================
+  # Rust Services
+  # ======================
+
+  rust-filewatcher:
+    command: ["rust-filewatcher", "--config", "/config/filewatcher.toml"]
+    working_dir: "/app"
+    env:
+      RUST_LOG: "info"
+      WEBSOCKET_PORT: "8765"
+      METRICS_PORT: "8766"
+      WATCH_PATHS: "/workspace:/app"
+      PERFORMANCE_MODE: "high"
+      BATCH_SIZE: "100"
+      DEBOUNCE_MS: "50"
+    port: 8765
+    health_check_url: "http://localhost:8766/health"
+    health_check_interval: 15
+    restart_policy: "always"
+    dependencies: []
+    timeout: 30
+    cpu_limit: 1.0
+    memory_limit: 512
+
+  # ======================
+  # LSP and AI Services
+  # ======================
+
+  ruff-lsp:
+    command: ["python", "/app/lsp-server.py"]
+    working_dir: "/app"
+    env:
+      LSP_PORT: "8767"
+      METRICS_PORT: "8768"
+      WORKSPACE_PATH: "/workspace"
+      AI_INTEGRATION: "true"
+      CLAUDE_API_KEY: "${CLAUDE_API_KEY}"
+      MAX_CONCURRENT_REQUESTS: "10"
+      PYTHONPATH: "/app"
+    port: 8767
+    health_check_url: "http://localhost:8768/health"
+    health_check_interval: 30
+    restart_policy: "always"
+    dependencies: ["rust-filewatcher"]
+    timeout: 45
+    cpu_limit: 1.5
+    memory_limit: 1024
+
+  # ======================
+  # Development Tools
+  # ======================
+
+  development-dashboard:
+    command: ["python", "/app/dashboard_server.py"]
+    working_dir: "/app"
+    env:
+      DASHBOARD_PORT: "8080"
+      WEBSOCKET_PORT: "8081"
+      FILEWATCHER_WS_URL: "ws://localhost:8765"
+      LSP_SERVER_URL: "http://localhost:8767"
+      PROMETHEUS_URL: "http://localhost:9090"
+      UPDATE_INTERVAL: "5"
+      THEME: "dark"
+      PYTHONPATH: "/app"
+    port: 8080
+    health_check_url: "http://localhost:8080/health"
+    health_check_interval: 30
+    restart_policy: "always"
+    dependencies: ["rust-filewatcher", "ruff-lsp"]
+    timeout: 30
+    cpu_limit: 0.5
+    memory_limit: 256
+
+  # ======================
+  # Core Application
+  # ======================
+
+  gterminal-app:
+    command:
+      [
+        "python",
+        "-m",
+        "gterminal.server",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8000",
+      ]
+    working_dir: "/app"
+    env:
+      PORT: "8000"
+      LOG_LEVEL: "INFO"
+      START_MODE: "server"
+      WORKERS: "4"
+
+      # Service integration
+      FILEWATCHER_WS_URL: "ws://localhost:8765"
+      LSP_SERVER_URL: "http://localhost:8767"
+      DASHBOARD_URL: "http://localhost:8080"
+
+      # Database connections
+      DATABASE_URL: "postgresql://gterminal:secure_password@localhost:5432/gterminal"
+      REDIS_URL: "redis://localhost:6379"
+
+      # Google Cloud
+      GOOGLE_GENAI_USE_VERTEXAI: "True"
+      GOOGLE_CLOUD_PROJECT: "${GOOGLE_CLOUD_PROJECT}"
+      GCP_PROFILE: "${GCP_PROFILE:-business}"
+
+      # Performance
+      REACT_CACHE_SIZE: "2000"
+      MAX_WORKERS: "8"
+      WORKER_TIMEOUT: "300"
+
+      # Python path
+      PYTHONPATH: "/app"
+    port: 8000
+    health_check_url: "http://localhost:8000/health"
+    health_check_interval: 30
+    restart_policy: "always"
+    dependencies: ["redis", "postgres", "rust-filewatcher", "ruff-lsp"]
+    timeout: 60
+    cpu_limit: 4.0
+    memory_limit: 4096
+
+  gterminal-mcp:
+    command: ["python", "-m", "gterminal.mcp.server", "--port", "3000"]
+    working_dir: "/app"
+    env:
+      MCP_PORT: "3000"
+      LOG_LEVEL: "INFO"
+      DATABASE_URL: "postgresql://gterminal:secure_password@localhost:5432/gterminal"
+      REDIS_URL: "redis://localhost:6379"
+      PYTHONPATH: "/app"
+    port: 3000
+    health_check_url: "http://localhost:3000/health"
+    health_check_interval: 30
+    restart_policy: "always"
+    dependencies: ["redis", "postgres"]
+    timeout: 45
+    cpu_limit: 1.0
+    memory_limit: 1024
+
+  gterminal-react:
+    command: ["python", "-m", "gterminal.react.server", "--port", "8001"]
+    working_dir: "/app"
+    env:
+      PORT: "8001"
+      LOG_LEVEL: "INFO"
+      REDIS_URL: "redis://localhost:6379"
+      MAX_REASONING_STEPS: "10"
+      REASONING_TIMEOUT: "120"
+      ENABLE_TOOL_CACHING: "true"
+      PYTHONPATH: "/app"
+    port: 8001
+    health_check_url: "http://localhost:8001/health"
+    health_check_interval: 30
+    restart_policy: "always"
+    dependencies: ["redis"]
+    timeout: 45
+    cpu_limit: 2.0
+    memory_limit: 2048
+
+  # ======================
+  # Monitoring Stack
+  # ======================
+
+  prometheus:
+    command:
+      [
+        "prometheus",
+        "--config.file=/etc/prometheus/prometheus.yml",
+        "--storage.tsdb.path=/prometheus",
+        "--web.console.libraries=/etc/prometheus/console_libraries",
+        "--web.console.templates=/etc/prometheus/consoles",
+        "--storage.tsdb.retention.time=30d",
+        "--web.enable-lifecycle",
+        "--web.enable-admin-api",
+      ]
+    working_dir: "/prometheus"
+    env:
+      PROMETHEUS_PORT: "9090"
+    port: 9090
+    health_check_url: "http://localhost:9090/-/healthy"
+    health_check_interval: 30
+    restart_policy: "always"
+    dependencies: ["gterminal-app", "rust-filewatcher", "ruff-lsp"]
+    timeout: 45
+    cpu_limit: 1.0
+    memory_limit: 1024
+
+  grafana:
+    command:
+      [
+        "grafana-server",
+        "--config=/etc/grafana/grafana.ini",
+        "--homepath=/usr/share/grafana",
+      ]
+    working_dir: "/var/lib/grafana"
+    env:
+      GF_SERVER_HTTP_PORT: "3003"
+      GF_SECURITY_ADMIN_PASSWORD: "${GRAFANA_PASSWORD:-admin}"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    port: 3003
+    health_check_url: "http://localhost:3003/api/health"
+    health_check_interval: 30
+    restart_policy: "always"
+    dependencies: ["prometheus"]
+    timeout: 60
+    cpu_limit: 0.5
+    memory_limit: 512
+
+  jaeger:
+    command: ["jaeger-all-in-one", "--collector.otlp.enabled=true"]
+    working_dir: "/tmp"
+    env:
+      SPAN_STORAGE_TYPE: "badger"
+      BADGER_EPHEMERAL: "false"
+      BADGER_DIRECTORY_VALUE: "/badger/data"
+      BADGER_DIRECTORY_KEY: "/badger/key"
+    port: 16686
+    health_check_url: "http://localhost:16686/"
+    health_check_interval: 30
+    restart_policy: "always"
+    dependencies: []
+    timeout: 45
+    cpu_limit: 0.5
+    memory_limit: 512
+
+  # ======================
+  # Load Balancer
+  # ======================
+
+  nginx:
+    command: ["nginx", "-g", "daemon off;"]
+    working_dir: "/etc/nginx"
+    env:
+      NGINX_PORT: "80"
+      NGINX_SSL_PORT: "443"
+    port: 80
+    health_check_url: "http://localhost/health"
+    health_check_interval: 30
+    restart_policy: "always"
+    dependencies: ["gterminal-app", "development-dashboard", "grafana"]
+    timeout: 30
+    cpu_limit: 0.5
+    memory_limit: 256
+
+# ======================
+# Global Configuration
+# ======================
+
+orchestrator:
+  log_level: "INFO"
+  health_check_timeout: 10
+  startup_timeout: 300
+  shutdown_timeout: 60
+  resource_monitoring_interval: 5
+  auto_restart_failed_services: true
+  max_restart_attempts: 3
+  restart_backoff_seconds: 30

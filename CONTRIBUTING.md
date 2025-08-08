@@ -3,6 +3,7 @@
 Thank you for your interest in contributing to gterminal-unified-agents! This document provides guidelines and information about contributing to this project.
 
 ## Table of Contents
+
 - [Code of Conduct](#code-of-conduct)
 - [Getting Started](#getting-started)
 - [Development Setup](#development-setup)
@@ -24,12 +25,14 @@ This project and everyone participating in it is governed by our Code of Conduct
 ## Development Setup
 
 ### Prerequisites
+
 - Python 3.11 or 3.12
 - Rust (latest stable)
 - uv (Python package manager)
 - Node.js (for frontend development)
 
 ### Environment Setup
+
 ```bash
 # Install dependencies
 uv sync --dev
@@ -42,6 +45,7 @@ uv run pre-commit install
 ```
 
 ### Building Rust Extensions
+
 ```bash
 cd gterminal_rust_extensions
 maturin develop
@@ -50,18 +54,22 @@ maturin develop
 ## Making Changes
 
 ### Branch Naming
+
 - Feature: `feature/description`
-- Bug fix: `fix/description`  
+- Bug fix: `fix/description`
 - Documentation: `docs/description`
 - Security: `security/description`
 
 ### Code Style
+
 - Python: Follow PEP 8, use `black` for formatting
 - Rust: Use `rustfmt` for formatting
 - Run linters before committing: `./scripts/lint.sh`
 
 ### Commit Messages
+
 Follow conventional commits format:
+
 ```
 type(scope): description
 
@@ -75,6 +83,7 @@ Types: `feat`, `fix`, `docs`, `style`, `refactor`, `test`, `chore`
 ## Testing
 
 ### Running Tests
+
 ```bash
 # Python tests
 uv run pytest
@@ -90,6 +99,7 @@ cd gterminal_rust_extensions && cargo test
 ```
 
 ### Test Coverage
+
 - Maintain minimum 80% test coverage
 - Add tests for new features
 - Update tests when modifying existing code
@@ -97,6 +107,7 @@ cd gterminal_rust_extensions && cargo test
 ## Submitting Changes
 
 ### Pull Request Process
+
 1. Create a feature branch from `main`
 2. Make your changes
 3. Add or update tests
@@ -105,6 +116,7 @@ cd gterminal_rust_extensions && cargo test
 6. Submit a pull request
 
 ### Pull Request Requirements
+
 - [ ] Tests pass
 - [ ] Code is linted
 - [ ] Documentation updated
@@ -114,11 +126,14 @@ cd gterminal_rust_extensions && cargo test
 ## Security
 
 ### Reporting Security Issues
+
 Please don't report security vulnerabilities through GitHub issues. Instead:
+
 - Email us at security@example.com
 - Use GitHub's private security reporting
 
-### Security Guidelines  
+### Security Guidelines
+
 - Never commit secrets or credentials
 - Validate all inputs
 - Use secure coding practices
@@ -127,6 +142,7 @@ Please don't report security vulnerabilities through GitHub issues. Instead:
 ## Performance
 
 ### Performance Guidelines
+
 - Profile performance-critical code
 - Benchmark changes
 - Consider memory usage
@@ -135,13 +151,16 @@ Please don't report security vulnerabilities through GitHub issues. Instead:
 ## Release Process
 
 ### Versioning
+
 We use Semantic Versioning (SemVer):
+
 - MAJOR.MINOR.PATCH
 - Major: Breaking changes
 - Minor: New features (backwards compatible)
 - Patch: Bug fixes
 
 ### Release Steps
+
 1. Update version in `pyproject.toml`
 2. Update CHANGELOG.md
 3. Create release PR

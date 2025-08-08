@@ -1,0 +1,16 @@
+id: avoid-clone-in-loop
+message: Cloning in loops can be expensive - consider borrowing
+severity: warning
+language: rust
+rule:
+  pattern: |
+    for $VAR in $ITER {
+      $$$BEFORE
+      $CLONED = $EXPR.clone();
+      $$$AFTER
+    }
+note: |
+  Consider:
+  - Borrowing with & instead of cloning
+  - Moving the clone outside the loop
+  - Using Cow (Clone on Write) for conditional cloning

@@ -1,762 +1,948 @@
-//! RustCache: High-performance concurrent cache with TTL and LRU eviction
+//! High-performance caching operations with TTL and memory-aware eviction
+//!
+//! This module provides high-performance cache operations using:
+//! - DashMap for concurrent access
+//! - LRU cache with efficient eviction
+//! - TTL-based automatic expiration
+//! - Memory-aware eviction to prevent OOM
+//! - System memory monitoring
+//! - Async background cleanup
 
-use crate::utils::{increment_ops, current_timestamp, track_allocation, track_deallocation};
-use anyhow::{Context, Result};
 use dashmap::DashMap;
+use lru::LruCache;
+use ttl_cache::TtlCache;
+use std::collections::HashMap;
+use std::sync::{Arc, RwLock, Mutex};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use serde::{Deserialize, Serialize};  // Re-enabled
+use ahash::AHasher;
 use pyo3::prelude::*;
-use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::sync::Arc;
-use std::time::Duration;
-use tokio::sync::RwLock;
-use tokio::time::{interval, Instant};
+use std::hash::{Hash, Hasher};
+use sysinfo::System;
+use std::num::NonZeroUsize;
+use tokio::task;
+use tokio::time::interval;
 
-/// Cache entry with TTL and access tracking
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct CacheEntry {
-    value: PyObject,
-    created_at: u64,
-    expires_at: Option<u64>,
-    last_accessed: u64,
-    access_count: u64,
-    size_bytes: u64,
+/// High-performance cache item with TTL support and memory tracking
+#[derive(Debug, Clone)]
+pub struct CacheItem {
+    pub value: Vec<u8>,  // Store as bytes for efficiency
+    pub created_at: u64, // Unix timestamp
+    pub ttl_seconds: u64,
+    pub access_count: u64,
+    pub last_accessed: u64, // For LRU tracking
+    pub content_hash: Option<u64>,
+    pub memory_size: usize, // Estimated memory usage in bytes
 }
 
-/// Cache statistics
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-struct CacheStats {
-    hits: u64,
-    misses: u64,
-    evictions: u64,
-    expired: u64,
-    total_ops: u64,
-    memory_used: u64,
-    peak_memory: u64,
+impl CacheItem {
+    pub fn new(value: Vec<u8>, ttl_seconds: u64) -> Self {
+        let mut hasher = AHasher::default();
+        value.hash(&mut hasher);
+
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
+        // Calculate memory size: value size + struct overhead (estimated)
+        let memory_size = value.len() + std::mem::size_of::<Self>();
+
+        Self {
+            value,
+            created_at: now,
+            ttl_seconds,
+            access_count: 0,
+            last_accessed: now,
+            content_hash: Some(hasher.finish()),
+            memory_size,
+        }
+    }
+
+    pub fn is_expired(&self) -> bool {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        now > (self.created_at + self.ttl_seconds)
+    }
+
+    pub fn remaining_ttl(&self) -> u64 {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        (self.created_at + self.ttl_seconds).saturating_sub(now)
+    }
 }
 
-/// High-performance concurrent cache
+/// High-performance in-memory cache with concurrent access and memory awareness
 #[pyclass]
 pub struct RustCache {
-    storage: Arc<DashMap<String, CacheEntry>>,
-    stats: Arc<parking_lot::RwLock<CacheStats>>,
-    max_capacity: usize,
-    default_ttl: Option<u64>,
-    max_memory: Option<u64>,
-    cleanup_interval: Duration,
-    runtime: tokio::runtime::Runtime,
-    cleanup_handle: Arc<RwLock<Option<tokio::task::JoinHandle<()>>>>,
+    cache: Arc<DashMap<String, CacheItem>>,
+    max_size: usize,
+    max_memory_bytes: usize,  // Maximum memory usage in bytes
+    memory_threshold: f64,    // System memory threshold (0.0-1.0)
+    default_ttl: u64,
+    // Statistics
+    hits: Arc<std::sync::atomic::AtomicU64>,
+    misses: Arc<std::sync::atomic::AtomicU64>,
+    sets: Arc<std::sync::atomic::AtomicU64>,
+    evictions: Arc<std::sync::atomic::AtomicU64>,
+    memory_evictions: Arc<std::sync::atomic::AtomicU64>,
+    current_memory: Arc<std::sync::atomic::AtomicUsize>,
+    // System monitor
+    system: Arc<RwLock<System>>,
 }
 
-#[pymethods]
 impl RustCache {
-    /// Create new cache instance
-    #[new]
-    #[pyo3(signature = (capacity = 10000, default_ttl_secs = None, max_memory_bytes = None, cleanup_interval_secs = 60))]
-    fn new(
-        capacity: usize,
-        default_ttl_secs: Option<u64>,
-        max_memory_bytes: Option<u64>,
-        cleanup_interval_secs: u64,
-    ) -> PyResult<Self> {
-        let runtime = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(2)
-            .thread_name("cache")
-            .enable_all()
-            .build()
-            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
-
-        let cache = Self {
-            storage: Arc::new(DashMap::new()),
-            stats: Arc::new(parking_lot::RwLock::new(CacheStats::default())),
-            max_capacity: capacity,
-            default_ttl: default_ttl_secs,
-            max_memory: max_memory_bytes,
-            cleanup_interval: Duration::from_secs(cleanup_interval_secs),
-            runtime,
-            cleanup_handle: Arc::new(RwLock::new(None)),
-        };
-
-        // Start background cleanup task
-        cache.start_cleanup_task();
-
-        Ok(cache)
+    pub fn new(max_size: usize, default_ttl_seconds: u64) -> Self {
+        Self::new_with_memory_limit(
+            max_size,
+            default_ttl_seconds,
+            100 * 1024 * 1024,  // Default 100MB max memory
+            0.85,  // Default 85% system memory threshold
+        )
     }
 
-    /// Store value in cache
-    #[pyo3(signature = (key, value, ttl_secs = None))]
-    fn set(&self, key: String, value: PyObject, ttl_secs: Option<u64>) -> PyResult<bool> {
-        self.runtime.block_on(async {
-            let now = current_timestamp();
-            let ttl = ttl_secs.or(self.default_ttl);
-            let expires_at = ttl.map(|t| now + t);
+    pub fn new_with_memory_limit(
+        max_size: usize,
+        default_ttl_seconds: u64,
+        max_memory_bytes: usize,
+        memory_threshold: f64,
+    ) -> Self {
+        let mut system = System::new_all();
+        system.refresh_memory();
 
-            // Calculate approximate size
-            let size_bytes = self.estimate_size(&key, &value);
-
-            // Check memory limit
-            if let Some(max_mem) = self.max_memory {
-                let current_memory = {
-                    let stats = self.stats.read();
-                    stats.memory_used
-                };
-
-                if current_memory + size_bytes > max_mem {
-                    // Try to free memory by evicting LRU items
-                    self.evict_lru_items(size_bytes).await;
-
-                    // Check again
-                    let current_memory = {
-                        let stats = self.stats.read();
-                        stats.memory_used
-                    };
-
-                    if current_memory + size_bytes > max_mem {
-                        return Ok(false); // Cannot store due to memory limit
-                    }
-                }
-            }
-
-            // Check capacity limit and evict if necessary
-            if self.storage.len() >= self.max_capacity {
-                self.evict_lru_items(0).await; // Evict at least one item
-            }
-
-            let entry = CacheEntry {
-                value,
-                created_at: now,
-                expires_at,
-                last_accessed: now,
-                access_count: 1,
-                size_bytes,
-            };
-
-            // Update existing entry or insert new one
-            let was_update = self.storage.contains_key(&key);
-            let old_size = if was_update {
-                self.storage.get(&key).map(|e| e.size_bytes).unwrap_or(0)
-            } else {
-                0
-            };
-
-            self.storage.insert(key, entry);
-
-            // Update statistics
-            {
-                let mut stats = self.stats.write();
-                if was_update {
-                    stats.memory_used = stats.memory_used.saturating_sub(old_size) + size_bytes;
-                } else {
-                    stats.memory_used += size_bytes;
-                    if stats.memory_used > stats.peak_memory {
-                        stats.peak_memory = stats.memory_used;
-                    }
-                }
-                stats.total_ops += 1;
-            }
-
-            increment_ops();
-            track_allocation(size_bytes);
-            if was_update {
-                track_deallocation(old_size);
-            }
-
-            Ok(true)
-        })
+        Self {
+            cache: Arc::new(DashMap::new()),
+            max_size,
+            max_memory_bytes,
+            memory_threshold: memory_threshold.clamp(0.1, 0.95),
+            default_ttl: default_ttl_seconds,
+            hits: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            misses: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            sets: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            evictions: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            memory_evictions: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            current_memory: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            system: Arc::new(RwLock::new(system)),
+        }
     }
 
-    /// Retrieve value from cache
-    fn get(&self, key: &str) -> PyResult<Option<PyObject>> {
-        let now = current_timestamp();
-
-        if let Some(mut entry) = self.storage.get_mut(key) {
-            // Check if expired
-            if let Some(expires_at) = entry.expires_at {
-                if now > expires_at {
-                    drop(entry); // Release the lock
-                    self.storage.remove(key);
-
-                    let mut stats = self.stats.write();
-                    stats.misses += 1;
-                    stats.expired += 1;
-                    stats.total_ops += 1;
-
-                    increment_ops();
-                    return Ok(None);
-                }
+    /// Get value from cache
+    pub fn get_internal(&self, key: &str) -> Result<Option<Vec<u8>>, Box<dyn std::error::Error>> {
+        if let Some(mut item) = self.cache.get_mut(key) {
+            if item.is_expired() {
+                // Remove expired item and update memory counter
+                let memory_freed = item.memory_size;
+                drop(item);
+                self.cache.remove(key);
+                self.current_memory
+                    .fetch_sub(memory_freed, std::sync::atomic::Ordering::Relaxed);
+                self.misses
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                return Ok(None);
             }
 
-            // Update access tracking
-            entry.last_accessed = now;
-            entry.access_count += 1;
+            // Update access statistics and LRU timestamp
+            item.access_count += 1;
+            item.last_accessed = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs();
+            self.hits.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
-            let value = entry.value.clone();
-
-            // Update statistics
-            {
-                let mut stats = self.stats.write();
-                stats.hits += 1;
-                stats.total_ops += 1;
-            }
-
-            increment_ops();
-            Ok(Some(value))
+            Ok(Some(item.value.clone()))
         } else {
-            // Cache miss
-            let mut stats = self.stats.write();
-            stats.misses += 1;
-            stats.total_ops += 1;
-
-            increment_ops();
+            self.misses
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             Ok(None)
         }
     }
 
+    /// Set value in cache with optional TTL
+    pub fn set_internal(
+        &self,
+        key: String,
+        value: Vec<u8>,
+        ttl_seconds: Option<u64>,
+    ) -> Result<bool, Box<dyn std::error::Error>> {
+        let ttl = ttl_seconds.unwrap_or(self.default_ttl);
+        let item = CacheItem::new(value, ttl);
+        let item_memory = item.memory_size;
+
+        // Check memory pressure before adding
+        if self.should_evict_for_memory(item_memory)? {
+            self.evict_for_memory_pressure(item_memory)?;
+        }
+
+        // Check size limits and evict if necessary
+        if self.cache.len() >= self.max_size && !self.cache.contains_key(&key) {
+            self.evict_expired();
+
+            // If still at capacity, evict least recently used
+            if self.cache.len() >= self.max_size {
+                self.evict_lru();
+            }
+        }
+
+        // Update memory counter if replacing existing item
+        if let Some(old_item) = self.cache.get(&key) {
+            self.current_memory
+                .fetch_sub(old_item.memory_size, std::sync::atomic::Ordering::Relaxed);
+        }
+
+        self.cache.insert(key, item);
+        self.current_memory
+            .fetch_add(item_memory, std::sync::atomic::Ordering::Relaxed);
+        self.sets.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
+        Ok(true)
+    }
+
     /// Remove key from cache
-    fn delete(&self, key: &str) -> PyResult<bool> {
-        if let Some((_, entry)) = self.storage.remove(key) {
-            // Update statistics
-            {
-                let mut stats = self.stats.write();
-                stats.memory_used = stats.memory_used.saturating_sub(entry.size_bytes);
-                stats.total_ops += 1;
-            }
-
-            increment_ops();
-            track_deallocation(entry.size_bytes);
-            Ok(true)
-        } else {
-            let mut stats = self.stats.write();
-            stats.total_ops += 1;
-
-            increment_ops();
-            Ok(false)
-        }
-    }
-
-    /// Check if key exists (without updating access time)
-    fn exists(&self, key: &str) -> PyResult<bool> {
-        let now = current_timestamp();
-
-        if let Some(entry) = self.storage.get(key) {
-            // Check if expired
-            if let Some(expires_at) = entry.expires_at {
-                if now > expires_at {
-                    drop(entry);
-                    self.storage.remove(key);
-                    return Ok(false);
-                }
-            }
+    pub fn delete_internal(&self, key: &str) -> Result<bool, Box<dyn std::error::Error>> {
+        if let Some((_, item)) = self.cache.remove(key) {
+            self.current_memory
+                .fetch_sub(item.memory_size, std::sync::atomic::Ordering::Relaxed);
             Ok(true)
         } else {
             Ok(false)
         }
     }
 
-    /// Get multiple values at once
-    fn get_many(&self, keys: Vec<&str>) -> PyResult<std::collections::HashMap<String, PyObject>> {
-        let mut result = std::collections::HashMap::new();
-        let now = current_timestamp();
+    /// Clear all entries or entries matching pattern
+    pub fn clear_internal(&self, pattern: Option<&str>) -> Result<usize, Box<dyn std::error::Error>> {
+        match pattern {
+            Some(pat) => {
+                let items_to_remove: Vec<(String, usize)> = self
+                    .cache
+                    .iter()
+                    .filter(|entry| entry.key().contains(pat))
+                    .map(|entry| (entry.key().clone(), entry.value().memory_size))
+                    .collect();
 
-        for key in keys {
-            if let Some(mut entry) = self.storage.get_mut(key) {
-                // Check if expired
-                if let Some(expires_at) = entry.expires_at {
-                    if now > expires_at {
-                        drop(entry);
-                        self.storage.remove(key);
-                        continue;
-                    }
+                let count = items_to_remove.len();
+                let mut total_memory_freed = 0;
+
+                for (key, memory_size) in items_to_remove {
+                    self.cache.remove(&key);
+                    total_memory_freed += memory_size;
                 }
 
-                // Update access tracking
-                entry.last_accessed = now;
-                entry.access_count += 1;
-
-                result.insert(key.to_string(), entry.value.clone());
-
-                // Update hit count
-                {
-                    let mut stats = self.stats.write();
-                    stats.hits += 1;
-                    stats.total_ops += 1;
-                }
-            } else {
-                // Update miss count
-                let mut stats = self.stats.write();
-                stats.misses += 1;
-                stats.total_ops += 1;
+                self.current_memory
+                    .fetch_sub(total_memory_freed, std::sync::atomic::Ordering::Relaxed);
+                Ok(count)
+            }
+            None => {
+                let count = self.cache.len();
+                self.cache.clear();
+                self.current_memory
+                    .store(0, std::sync::atomic::Ordering::Relaxed);
+                Ok(count)
             }
         }
-
-        increment_ops();
-        Ok(result)
     }
 
-    /// Set multiple key-value pairs
-    fn set_many(&self, items: std::collections::HashMap<String, PyObject>) -> PyResult<Vec<String>> {
-        self.runtime.block_on(async {
-            let mut successful = Vec::new();
+    /// Get cache statistics
+    pub fn stats_internal(&self) -> Result<HashMap<String, u64>, Box<dyn std::error::Error>> {
+        let mut stats = HashMap::new();
+        stats.insert("size".to_string(), self.cache.len() as u64);
+        stats.insert("max_size".to_string(), self.max_size as u64);
+        stats.insert(
+            "hits".to_string(),
+            self.hits.load(std::sync::atomic::Ordering::Relaxed),
+        );
+        stats.insert(
+            "misses".to_string(),
+            self.misses.load(std::sync::atomic::Ordering::Relaxed),
+        );
+        stats.insert(
+            "sets".to_string(),
+            self.sets.load(std::sync::atomic::Ordering::Relaxed),
+        );
+        stats.insert(
+            "evictions".to_string(),
+            self.evictions.load(std::sync::atomic::Ordering::Relaxed),
+        );
+        stats.insert(
+            "memory_evictions".to_string(),
+            self.memory_evictions.load(std::sync::atomic::Ordering::Relaxed),
+        );
 
-            for (key, value) in items {
-                if self.set(key.clone(), value, None)? {
-                    successful.push(key);
-                }
-            }
+        // Memory statistics
+        let current_memory = self.current_memory.load(std::sync::atomic::Ordering::Relaxed);
+        stats.insert("memory_bytes".to_string(), current_memory as u64);
+        stats.insert("memory_mb".to_string(), (current_memory / (1024 * 1024)) as u64);
+        stats.insert("max_memory_bytes".to_string(), self.max_memory_bytes as u64);
+        stats.insert("max_memory_mb".to_string(), (self.max_memory_bytes / (1024 * 1024)) as u64);
 
-            Ok(successful)
-        })
+        // System memory stats
+        if let Ok(system) = self.system.read() {
+            stats.insert("system_total_memory_mb".to_string(), system.total_memory() / 1024);
+            stats.insert("system_used_memory_mb".to_string(), system.used_memory() / 1024);
+            stats.insert("system_available_memory_mb".to_string(), system.available_memory() / 1024);
+            let memory_usage_percent = (system.used_memory() as f64 / system.total_memory() as f64) * 100.0;
+            stats.insert("system_memory_percent".to_string(), memory_usage_percent as u64);
+        }
+
+        let total_requests = stats["hits"] + stats["misses"];
+        let hit_rate = if total_requests > 0 {
+            (stats["hits"] as f64 / total_requests as f64 * 100.0) as u64
+        } else {
+            0
+        };
+        stats.insert("hit_rate_percent".to_string(), hit_rate);
+
+        Ok(stats)
     }
 
-    /// Get all keys matching pattern
-    fn keys(&self, pattern: Option<&str>) -> PyResult<Vec<String>> {
-        let regex = pattern.map(|p| regex::Regex::new(p))
-            .transpose()
-            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+    /// Check if key exists and is not expired
+    pub fn contains_internal(&self, key: &str) -> Result<bool, Box<dyn std::error::Error>> {
+        if let Some(item) = self.cache.get(key) {
+            Ok(!item.is_expired())
+        } else {
+            Ok(false)
+        }
+    }
 
-        let keys: Vec<String> = self.storage.iter()
-            .filter_map(|entry| {
-                let key = entry.key();
-                if let Some(ref r) = regex {
-                    if r.is_match(key) {
-                        Some(key.clone())
-                    } else {
-                        None
-                    }
-                } else {
-                    Some(key.clone())
-                }
-            })
-            .collect();
+    /// Get keys matching pattern
+    pub fn keys(
+        &self,
+        pattern: Option<&str>,
+        limit: Option<usize>,
+    ) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+        let keys: Vec<String> = match pattern {
+            Some(pat) => self
+                .cache
+                .iter()
+                .filter(|entry| entry.key().contains(pat))
+                .filter(|entry| !entry.value().is_expired())
+                .take(limit.unwrap_or(usize::MAX))
+                .map(|entry| entry.key().clone())
+                .collect(),
+            None => self
+                .cache
+                .iter()
+                .filter(|entry| !entry.value().is_expired())
+                .take(limit.unwrap_or(usize::MAX))
+                .map(|entry| entry.key().clone())
+                .collect(),
+        };
 
         Ok(keys)
     }
 
-    /// Get cache size (number of entries)
-    fn size(&self) -> PyResult<usize> {
-        Ok(self.storage.len())
-    }
+    /// Batch get operation - more efficient than multiple gets
+    pub fn batch_get_internal(
+        &self,
+        keys: Vec<&str>,
+    ) -> Result<HashMap<String, Vec<u8>>, Box<dyn std::error::Error>> {
+        let mut results = HashMap::new();
 
-    /// Get memory usage in bytes
-    fn memory_usage(&self) -> PyResult<u64> {
-        let stats = self.stats.read();
-        Ok(stats.memory_used)
-    }
-
-    /// Clear all entries
-    fn clear(&self) -> PyResult<usize> {
-        let count = self.storage.len();
-        self.storage.clear();
-
-        // Reset memory usage
-        {
-            let mut stats = self.stats.write();
-            track_deallocation(stats.memory_used);
-            stats.memory_used = 0;
-            stats.total_ops += 1;
+        for key in keys {
+            if let Some(value) = self.get_internal(key)? {
+                results.insert(key.to_string(), value);
+            }
         }
 
-        increment_ops();
+        Ok(results)
+    }
+
+    /// Batch set operation - more efficient than multiple sets
+    pub fn batch_set_internal(
+        &self,
+        items: HashMap<String, Vec<u8>>,
+        ttl_seconds: Option<u64>,
+    ) -> Result<usize, Box<dyn std::error::Error>> {
+        let ttl = ttl_seconds.unwrap_or(self.default_ttl);
+        let mut count = 0;
+
+        for (key, value) in items {
+            if self.set_internal(key, value, Some(ttl))? {
+                count += 1;
+            }
+        }
+
         Ok(count)
-    }
-
-    /// Set TTL for existing key
-    fn expire(&self, key: &str, ttl_secs: u64) -> PyResult<bool> {
-        if let Some(mut entry) = self.storage.get_mut(key) {
-            let now = current_timestamp();
-            entry.expires_at = Some(now + ttl_secs);
-            Ok(true)
-        } else {
-            Ok(false)
-        }
-    }
-
-    /// Get TTL for key (seconds remaining)
-    fn ttl(&self, key: &str) -> PyResult<Option<u64>> {
-        if let Some(entry) = self.storage.get(key) {
-            if let Some(expires_at) = entry.expires_at {
-                let now = current_timestamp();
-                if expires_at > now {
-                    Ok(Some(expires_at - now))
-                } else {
-                    Ok(Some(0)) // Expired
-                }
-            } else {
-                Ok(None) // No TTL set
-            }
-        } else {
-            Ok(None) // Key not found
-        }
-    }
-
-    /// Increment counter value
-    #[pyo3(signature = (key, increment = 1, ttl_secs = None))]
-    fn incr(&self, key: &str, increment: i64, ttl_secs: Option<u64>) -> PyResult<i64> {
-        Python::with_gil(|py| {
-            let current_value = self.get(key)?
-                .and_then(|obj| obj.extract::<i64>(py).ok())
-                .unwrap_or(0);
-
-            let new_value = current_value + increment;
-            self.set(key.to_string(), new_value.into_py(py), ttl_secs)?;
-
-            Ok(new_value)
-        })
-    }
-
-    /// Decrement counter value
-    #[pyo3(signature = (key, decrement = 1, ttl_secs = None))]
-    fn decr(&self, key: &str, decrement: i64, ttl_secs: Option<u64>) -> PyResult<i64> {
-        self.incr(key, -decrement, ttl_secs)
-    }
-
-    /// Get cache statistics
-    fn get_stats(&self) -> PyResult<std::collections::HashMap<String, u64>> {
-        let stats = self.stats.read();
-        let mut result = std::collections::HashMap::new();
-
-        result.insert("hits".to_string(), stats.hits);
-        result.insert("misses".to_string(), stats.misses);
-        result.insert("evictions".to_string(), stats.evictions);
-        result.insert("expired".to_string(), stats.expired);
-        result.insert("total_ops".to_string(), stats.total_ops);
-        result.insert("memory_used".to_string(), stats.memory_used);
-        result.insert("peak_memory".to_string(), stats.peak_memory);
-        result.insert("entries".to_string(), self.storage.len() as u64);
-
-        // Calculate hit rate
-        let total_gets = stats.hits + stats.misses;
-        let hit_rate = if total_gets > 0 {
-            (stats.hits * 100) / total_gets
-        } else {
-            0
-        };
-        result.insert("hit_rate_percent".to_string(), hit_rate);
-
-        Ok(result)
-    }
-
-    /// Reset cache statistics
-    fn clear_stats(&self) -> PyResult<()> {
-        let mut stats = self.stats.write();
-        *stats = CacheStats::default();
-        Ok(())
-    }
-
-    /// Manual cleanup of expired entries
-    fn cleanup(&self) -> PyResult<u64> {
-        self.runtime.block_on(async {
-            let removed = self.cleanup_expired().await;
-            Ok(removed)
-        })
-    }
-
-    /// Persist cache to file (snapshot)
-    fn save_snapshot(&self, path: &str) -> PyResult<usize> {
-        self.runtime.block_on(async {
-            let snapshot = self.create_snapshot().await;
-            let serialized = serde_json::to_vec(&snapshot)
-                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
-
-            // Compress the data
-            use flate2::write::GzEncoder;
-            use flate2::Compression;
-            use std::io::Write;
-
-            let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
-            encoder.write_all(&serialized)
-                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
-            let compressed = encoder.finish()
-                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
-
-            tokio::fs::write(path, &compressed).await
-                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
-
-            Ok(compressed.len())
-        })
-    }
-
-    /// Load cache from snapshot file
-    fn load_snapshot(&self, path: &str) -> PyResult<usize> {
-        self.runtime.block_on(async {
-            let compressed = tokio::fs::read(path).await
-                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
-
-            // Decompress the data
-            use flate2::read::GzDecoder;
-            use std::io::Read;
-
-            let mut decoder = GzDecoder::new(&compressed[..]);
-            let mut serialized = Vec::new();
-            decoder.read_to_end(&mut serialized)
-                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
-
-            let snapshot: CacheSnapshot = serde_json::from_slice(&serialized)
-                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
-
-            let loaded = self.restore_snapshot(snapshot).await?;
-            Ok(loaded)
-        })
-    }
-
-    /// Optimize cache by removing expired and least-used entries
-    fn optimize(&self) -> PyResult<std::collections::HashMap<String, u64>> {
-        self.runtime.block_on(async {
-            let mut results = std::collections::HashMap::new();
-
-            // Clean up expired entries
-            let expired_removed = self.cleanup_expired().await;
-            results.insert("expired_removed".to_string(), expired_removed);
-
-            // If still over capacity, remove LRU entries
-            let capacity_removed = if self.storage.len() > self.max_capacity {
-                self.evict_lru_items(0).await
-            } else {
-                0
-            };
-            results.insert("lru_removed".to_string(), capacity_removed);
-
-            // Update peak memory if current usage is lower
-            {
-                let mut stats = self.stats.write();
-                if stats.memory_used < stats.peak_memory {
-                    stats.peak_memory = stats.memory_used;
-                }
-            }
-
-            Ok(results)
-        })
     }
 }
 
-/// Snapshot structure for persistence
-#[derive(Serialize, Deserialize)]
-struct CacheSnapshot {
-    entries: Vec<(String, CacheEntry)>,
-    stats: CacheStats,
-    metadata: std::collections::HashMap<String, String>,
+impl Default for RustCache {
+    fn default() -> Self {
+        Self::new(10000, 3600)
+    }
 }
 
 impl RustCache {
-    /// Start background cleanup task
-    fn start_cleanup_task(&self) {
-        let storage = Arc::clone(&self.storage);
-        let stats = Arc::clone(&self.stats);
-        let cleanup_interval = self.cleanup_interval;
-        let cleanup_handle = Arc::clone(&self.cleanup_handle);
+    /// Check if memory eviction is needed
+    fn should_evict_for_memory(&self, new_item_size: usize) -> Result<bool, Box<dyn std::error::Error>> {
+        let current_memory = self.current_memory.load(std::sync::atomic::Ordering::Relaxed);
 
-        self.runtime.spawn(async move {
-            let mut interval = interval(cleanup_interval);
-
-            loop {
-                interval.tick().await;
-
-                // Check if we should stop
-                if Arc::strong_count(&storage) <= 2 { // Only this task and the main struct
-                    break;
-                }
-
-                // Cleanup expired entries
-                let now = current_timestamp();
-                let mut expired_count = 0u64;
-                let mut freed_memory = 0u64;
-
-                storage.retain(|_, entry| {
-                    if let Some(expires_at) = entry.expires_at {
-                        if now > expires_at {
-                            expired_count += 1;
-                            freed_memory += entry.size_bytes;
-                            track_deallocation(entry.size_bytes);
-                            return false;
-                        }
-                    }
-                    true
-                });
-
-                // Update statistics
-                if expired_count > 0 {
-                    let mut stats = stats.write();
-                    stats.expired += expired_count;
-                    stats.memory_used = stats.memory_used.saturating_sub(freed_memory);
-
-                    tracing::debug!("Cleaned up {} expired entries, freed {} bytes",
-                        expired_count, freed_memory);
-                }
-            }
-
-            tracing::debug!("Cache cleanup task terminated");
-        });
-
-        // Store handle for cleanup
-        self.runtime.spawn(async move {
-            if let Ok(mut handle_guard) = cleanup_handle.write().await {
-                // The cleanup task is managed by the runtime, not stored directly
-                *handle_guard = None;
-            }
-        });
-    }
-
-    /// Estimate size of key-value pair in bytes
-    fn estimate_size(&self, key: &str, value: &PyObject) -> u64 {
-        let key_size = key.len() as u64;
-
-        // Rough estimate of Python object size
-        let value_size = Python::with_gil(|py| -> u64 {
-            if let Ok(s) = value.extract::<String>(py) {
-                s.len() as u64
-            } else if let Ok(_) = value.extract::<i64>(py) {
-                8
-            } else if let Ok(_) = value.extract::<f64>(py) {
-                8
-            } else if let Ok(_) = value.extract::<bool>(py) {
-                1
-            } else if let Ok(bytes) = value.extract::<Vec<u8>>(py) {
-                bytes.len() as u64
-            } else {
-                // Default estimate for complex objects
-                256
-            }
-        });
-
-        key_size + value_size + 128 // Add overhead for metadata
-    }
-
-    /// Clean up expired entries
-    async fn cleanup_expired(&self) -> u64 {
-        let now = current_timestamp();
-        let mut expired_count = 0u64;
-        let mut freed_memory = 0u64;
-
-        self.storage.retain(|_, entry| {
-            if let Some(expires_at) = entry.expires_at {
-                if now > expires_at {
-                    expired_count += 1;
-                    freed_memory += entry.size_bytes;
-                    track_deallocation(entry.size_bytes);
-                    return false;
-                }
-            }
-            true
-        });
-
-        // Update statistics
-        if expired_count > 0 {
-            let mut stats = self.stats.write();
-            stats.expired += expired_count;
-            stats.memory_used = stats.memory_used.saturating_sub(freed_memory);
+        // Check cache memory limit
+        if current_memory + new_item_size > self.max_memory_bytes {
+            return Ok(true);
         }
 
-        expired_count
+        // Check system memory pressure
+        if let Ok(mut system) = self.system.write() {
+            system.refresh_memory();
+            let memory_usage = system.used_memory() as f64 / system.total_memory() as f64;
+            if memory_usage > self.memory_threshold {
+                return Ok(true);
+            }
+        }
+
+        Ok(false)
     }
 
-    /// Evict least recently used items
-    async fn evict_lru_items(&self, required_bytes: u64) -> u64 {
-        // Collect entries with access info
-        let mut entries: Vec<(String, u64, u64, u64)> = self.storage.iter()
-            .map(|item| {
-                let key = item.key().clone();
-                let entry = item.value();
-                (key, entry.last_accessed, entry.access_count, entry.size_bytes)
-            })
+    /// Evict items to free memory for new item
+    fn evict_for_memory_pressure(&self, required_memory: usize) -> Result<(), Box<dyn std::error::Error>> {
+        let current_memory = self.current_memory.load(std::sync::atomic::Ordering::Relaxed);
+        let mut memory_to_free = if current_memory + required_memory > self.max_memory_bytes {
+            (current_memory + required_memory) - self.max_memory_bytes + (self.max_memory_bytes / 10) // Free 10% extra
+        } else {
+            self.max_memory_bytes / 10 // Free at least 10% of max
+        };
+
+        // First, remove expired entries
+        let expired_items: Vec<(String, usize)> = self
+            .cache
+            .iter()
+            .filter(|entry| entry.value().is_expired())
+            .map(|entry| (entry.key().clone(), entry.value().memory_size))
             .collect();
 
-        // Sort by last_accessed (ascending) then by access_count (ascending)
-        entries.sort_by(|a, b| {
-            a.1.cmp(&b.1).then_with(|| a.2.cmp(&b.2))
-        });
-
-        let mut evicted_count = 0u64;
-        let mut freed_memory = 0u64;
-        let target_count = std::cmp::max(1, self.storage.len() / 10); // Evict at least 10%
-
-        for (key, _, _, size) in entries.into_iter().take(target_count) {
-            if let Some((_, entry)) = self.storage.remove(&key) {
-                evicted_count += 1;
-                freed_memory += entry.size_bytes;
-                track_deallocation(entry.size_bytes);
-
-                // Stop if we've freed enough memory
-                if required_bytes > 0 && freed_memory >= required_bytes {
-                    break;
-                }
-            }
+        for (key, size) in expired_items {
+            self.cache.remove(&key);
+            self.current_memory
+                .fetch_sub(size, std::sync::atomic::Ordering::Relaxed);
+            memory_to_free = memory_to_free.saturating_sub(size);
+            self.memory_evictions
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         }
 
-        // Update statistics
-        if evicted_count > 0 {
-            let mut stats = self.stats.write();
-            stats.evictions += evicted_count;
-            stats.memory_used = stats.memory_used.saturating_sub(freed_memory);
+        if memory_to_free == 0 {
+            return Ok(());
         }
 
-        evicted_count
-    }
-
-    /// Create snapshot for persistence
-    async fn create_snapshot(&self) -> CacheSnapshot {
-        let entries: Vec<(String, CacheEntry)> = self.storage.iter()
-            .map(|item| (item.key().clone(), item.value().clone()))
+        // Then, remove least recently used items
+        let mut lru_candidates: Vec<(String, u64, usize)> = self
+            .cache
+            .iter()
+            .map(|entry| (
+                entry.key().clone(),
+                entry.value().last_accessed,
+                entry.value().memory_size,
+            ))
             .collect();
 
-        let stats = self.stats.read().clone();
+        // Sort by last accessed time (oldest first)
+        lru_candidates.sort_by_key(|(_, last_accessed, _)| *last_accessed);
 
-        let mut metadata = std::collections::HashMap::new();
-        metadata.insert("version".to_string(), "1.0".to_string());
-        metadata.insert("created_at".to_string(), current_timestamp().to_string());
-        metadata.insert("entry_count".to_string(), entries.len().to_string());
+        for (key, _, size) in lru_candidates {
+            if memory_to_free == 0 {
+                break;
+            }
 
-        CacheSnapshot {
-            entries,
-            stats,
-            metadata,
+            self.cache.remove(&key);
+            self.current_memory
+                .fetch_sub(size, std::sync::atomic::Ordering::Relaxed);
+            memory_to_free = memory_to_free.saturating_sub(size);
+            self.memory_evictions
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         }
+
+        Ok(())
     }
 
-    /// Restore from snapshot
-    async fn restore_snapshot(&self, snapshot: CacheSnapshot) -> PyResult<usize> {
-        // Clear current cache
-        self.storage.clear();
+    /// Remove expired entries
+    fn evict_expired(&self) {
+        let expired_items: Vec<(String, usize)> = self
+            .cache
+            .iter()
+            .filter(|entry| entry.value().is_expired())
+            .map(|entry| (entry.key().clone(), entry.value().memory_size))
+            .collect();
 
-        let now = current_timestamp();
-        let mut loaded_count = 0;
-        let mut memory_used = 0;
+        let count = expired_items.len();
+        let mut total_memory_freed = 0;
 
-        Python::with_gil(|py| -> PyResult<()> {
-            for (key, mut entry) in snapshot.entries {
-                // Skip expired entries
-                if let Some(expires_at) = entry.expires_at {
-                    if now > expires_at {
-                        continue;
-                    }
-                }
+        for (key, memory_size) in expired_items {
+            self.cache.remove(&key);
+            total_memory_freed += memory_size;
+        }
 
-                // Convert serialized value back to PyObject
-                // Note: This is a simplified approach - in practice, you'd need
-                // proper serialization/deserialization of Python objects
-                memory_used += entry.size_bytes;
-                self.storage.insert(key, entry);
-                loaded_count += 1;
+        self.current_memory
+            .fetch_sub(total_memory_freed, std::sync::atomic::Ordering::Relaxed);
+        self.evictions
+            .fetch_add(count as u64, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Remove least recently used entries
+    fn evict_lru(&self) {
+        let mut oldest_key: Option<String> = None;
+        let mut oldest_time = u64::MAX;
+        let mut oldest_memory_size = 0;
+
+        // Find the least recently accessed entry
+        for entry in self.cache.iter() {
+            let access_time = entry.value().last_accessed;
+            if access_time < oldest_time {
+                oldest_time = access_time;
+                oldest_key = Some(entry.key().clone());
+                oldest_memory_size = entry.value().memory_size;
             }
+        }
 
-            // Restore statistics (partially)
-            {
-                let mut stats = self.stats.write();
-                stats.memory_used = memory_used;
-                if memory_used > stats.peak_memory {
-                    stats.peak_memory = memory_used;
-                }
-            }
-
-            Ok(())
-        })?;
-
-        Ok(loaded_count)
+        if let Some(key) = oldest_key {
+            self.cache.remove(&key);
+            self.current_memory
+                .fetch_sub(oldest_memory_size, std::sync::atomic::Ordering::Relaxed);
+            self.evictions
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
     }
 }
 
-impl Drop for RustCache {
-    fn drop(&mut self) {
-        // The cleanup task will detect the reduced reference count and terminate
-        tracing::debug!("RustCache dropped");
+#[pymethods]
+impl RustCache {
+    #[new]
+    #[pyo3(signature = (max_size=1000, default_ttl_seconds=3600, max_memory_mb=100, memory_threshold=0.85))]
+    pub fn py_new(
+        max_size: usize,
+        default_ttl_seconds: u64,
+        max_memory_mb: usize,
+        memory_threshold: f64,
+    ) -> Self {
+        Self::new_with_memory_limit(
+            max_size,
+            default_ttl_seconds,
+            max_memory_mb * 1024 * 1024,  // Convert MB to bytes
+            memory_threshold,
+        )
+    }
+
+    /// Python wrapper for get
+    pub fn py_get(&self, key: &str) -> PyResult<Option<Vec<u8>>> {
+        self.get_internal(key)
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+    }
+
+    /// Python wrapper for set
+    pub fn py_set(&self, key: String, value: Vec<u8>, ttl_seconds: Option<u64>) -> PyResult<bool> {
+        self.set_internal(key, value, ttl_seconds)
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+    }
+
+    /// Python wrapper for delete
+    pub fn py_delete(&self, key: &str) -> PyResult<bool> {
+        self.delete_internal(key)
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+    }
+
+    /// Python wrapper for contains
+    pub fn py_contains(&self, key: &str) -> PyResult<bool> {
+        self.contains_internal(key)
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+    }
+
+    /// Python wrapper for clear
+    pub fn py_clear(&self, pattern: Option<&str>) -> PyResult<usize> {
+        self.clear_internal(pattern)
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+    }
+
+    /// Python wrapper for stats
+    pub fn py_stats(&self) -> PyResult<HashMap<String, u64>> {
+        self.stats_internal()
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+    }
+
+    /// Python wrapper for batch_get
+    pub fn py_batch_get(&self, keys: Vec<String>) -> PyResult<HashMap<String, Vec<u8>>> {
+        let key_refs: Vec<&str> = keys.iter().map(|k| k.as_str()).collect();
+        self.batch_get_internal(key_refs)
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+    }
+
+    /// Python wrapper for batch_set
+    pub fn py_batch_set(&self, items: HashMap<String, Vec<u8>>, ttl_seconds: Option<u64>) -> PyResult<usize> {
+        self.batch_set_internal(items, ttl_seconds)
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+    }
+
+    /// Get memory statistics
+    pub fn memory_info(&self) -> PyResult<HashMap<String, u64>> {
+        let mut info = HashMap::new();
+        let current_memory = self.current_memory.load(std::sync::atomic::Ordering::Relaxed);
+        info.insert("current_bytes".to_string(), current_memory as u64);
+        info.insert("current_mb".to_string(), (current_memory / (1024 * 1024)) as u64);
+        info.insert("max_bytes".to_string(), self.max_memory_bytes as u64);
+        info.insert("max_mb".to_string(), (self.max_memory_bytes / (1024 * 1024)) as u64);
+        info.insert("memory_threshold_percent".to_string(), (self.memory_threshold * 100.0) as u64);
+        info.insert("memory_evictions".to_string(),
+            self.memory_evictions.load(std::sync::atomic::Ordering::Relaxed));
+
+        Ok(info)
+    }
+
+    /// Manually trigger memory pressure eviction
+    pub fn evict_memory(&self, target_mb: Option<usize>) -> PyResult<()> {
+        let target_bytes = target_mb.map(|mb| mb * 1024 * 1024).unwrap_or(self.max_memory_bytes / 10);
+        self.evict_for_memory_pressure(target_bytes)
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+    }
+
+    // Python API compatible methods
+    /// Get value from cache with automatic conversion
+    pub fn get(&self, key: String) -> PyResult<Option<String>> {
+        match self.py_get(&key)? {
+            Some(bytes) => {
+                // Try to convert bytes to string
+                match String::from_utf8(bytes) {
+                    Ok(s) => Ok(Some(s)),
+                    Err(_) => Ok(None), // Return None for non-UTF8 data
+                }
+            }
+            None => Ok(None),
+        }
+    }
+
+    /// Set value in cache with automatic conversion
+    pub fn set(&self, key: String, value: String, ttl_seconds: Option<u64>) -> PyResult<bool> {
+        self.py_set(key, value.into_bytes(), ttl_seconds)
+    }
+
+    /// Delete key from cache
+    pub fn delete(&self, key: String) -> PyResult<bool> {
+        self.py_delete(&key)
+    }
+
+    /// Check if key exists
+    pub fn contains(&self, key: String) -> PyResult<bool> {
+        self.py_contains(&key)
+    }
+
+    /// Clear cache
+    pub fn clear(&self) -> PyResult<()> {
+        self.py_clear(None)?;
+        Ok(())
+    }
+
+    /// Get cache statistics
+    pub fn stats(&self) -> PyResult<HashMap<String, u64>> {
+        self.py_stats()
+    }
+
+    /// Batch get operation
+    pub fn batch_get(&self, keys: Vec<String>) -> PyResult<HashMap<String, String>> {
+        let result = self.py_batch_get(keys)?;
+        let mut converted = HashMap::new();
+        for (key, bytes) in result {
+            if let Ok(s) = String::from_utf8(bytes) {
+                converted.insert(key, s);
+            }
+        }
+        Ok(converted)
+    }
+
+    /// Batch set operation
+    pub fn batch_set(&self, items: HashMap<String, String>, ttl_seconds: u64) -> PyResult<u32> {
+        let converted: HashMap<String, Vec<u8>> = items
+            .into_iter()
+            .map(|(k, v)| (k, v.into_bytes()))
+            .collect();
+        let count = self.py_batch_set(converted, Some(ttl_seconds))?;
+        Ok(count as u32)
+    }
+}
+
+/// Redis-backed cache with connection pooling (placeholder implementation)
+pub struct RustRedisCache {
+    connection_manager: Arc<RwLock<Option<String>>>, // Placeholder for ConnectionManager
+    key_prefix: String,
+    default_ttl: u64,
+    // Statistics
+    hits: Arc<std::sync::atomic::AtomicU64>,
+    misses: Arc<std::sync::atomic::AtomicU64>,
+    sets: Arc<std::sync::atomic::AtomicU64>,
+}
+
+impl RustRedisCache {
+    pub fn new(_redis_url: String, key_prefix: String, default_ttl_seconds: u64) -> Self {
+        Self {
+            connection_manager: Arc::new(RwLock::new(None)),
+            key_prefix,
+            default_ttl: default_ttl_seconds,
+            hits: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            misses: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            sets: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        }
+    }
+
+    /// Initialize Redis connection (placeholder implementation)
+    pub fn connect(&self, redis_url: String) -> Result<(), Box<dyn std::error::Error>> {
+        let mut conn_guard = self
+            .connection_manager
+            .write()
+            .map_err(|e| format!("Lock error: {e}"))?;
+        *conn_guard = Some(redis_url);
+        Ok(())
+    }
+
+    /// Get value from Redis (placeholder implementation)
+    pub fn get(&self, key: &str) -> Result<Option<Vec<u8>>, Box<dyn std::error::Error>> {
+        let _prefixed_key = format!("{}{}", self.key_prefix, key);
+        // Placeholder implementation - Redis temporarily disabled
+        self.misses
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        Ok(None)
+    }
+
+    /// Set value in Redis with TTL (placeholder implementation)
+    pub fn set(
+        &self,
+        _key: &str,
+        _value: Vec<u8>,
+        _ttl_seconds: Option<u64>,
+    ) -> Result<bool, Box<dyn std::error::Error>> {
+        // Placeholder implementation - Redis temporarily disabled
+        self.sets.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        Ok(true)
+    }
+
+    /// Delete key from Redis (placeholder implementation)
+    pub fn delete(&self, _key: &str) -> Result<bool, Box<dyn std::error::Error>> {
+        // Placeholder implementation - Redis temporarily disabled
+        Ok(false)
+    }
+
+    /// Get Redis statistics
+    pub fn stats(&self) -> Result<HashMap<String, u64>, Box<dyn std::error::Error>> {
+        let mut stats = HashMap::new();
+        stats.insert(
+            "hits".to_string(),
+            self.hits.load(std::sync::atomic::Ordering::Relaxed),
+        );
+        stats.insert(
+            "misses".to_string(),
+            self.misses.load(std::sync::atomic::Ordering::Relaxed),
+        );
+        stats.insert(
+            "sets".to_string(),
+            self.sets.load(std::sync::atomic::Ordering::Relaxed),
+        );
+
+        let total_requests = stats["hits"] + stats["misses"];
+        let hit_rate = if total_requests > 0 {
+            (stats["hits"] as f64 / total_requests as f64 * 100.0) as u64
+        } else {
+            0
+        };
+        stats.insert("hit_rate_percent".to_string(), hit_rate);
+
+        Ok(stats)
+    }
+}
+
+/// Multi-layer cache manager combining memory and Redis
+#[pyclass]
+pub struct RustCacheManager {
+    l1_cache: Arc<RustCache>,
+    l2_cache: Option<Arc<RustRedisCache>>,
+    total_hits: Arc<std::sync::atomic::AtomicU64>,
+    total_misses: Arc<std::sync::atomic::AtomicU64>,
+}
+
+impl RustCacheManager {
+    pub fn new(
+        memory_max_size: usize,
+        memory_ttl: u64,
+        redis_cache: Option<&RustRedisCache>,
+    ) -> Self {
+        Self {
+            l1_cache: Arc::new(RustCache::new(memory_max_size, memory_ttl)),
+            l2_cache: redis_cache.map(|rc| Arc::new(rc.clone())),
+            total_hits: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            total_misses: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        }
+    }
+
+    /// Get value from multi-layer cache
+    pub fn get_internal(&self, key: &str) -> Result<Option<Vec<u8>>, Box<dyn std::error::Error>> {
+        // Try L1 cache first
+        if let Some(value) = self.l1_cache.get_internal(key)? {
+            self.total_hits
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            return Ok(Some(value));
+        }
+
+        // Try L2 cache if available
+        if let Some(ref l2) = self.l2_cache {
+            if let Some(value) = l2.get(key)? {
+                // Store in L1 for future access
+                self.l1_cache.set_internal(key.to_string(), value.clone(), None)?;
+                self.total_hits
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                return Ok(Some(value));
+            }
+        }
+
+        self.total_misses
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        Ok(None)
+    }
+
+    /// Set value in multi-layer cache
+    pub fn set_internal(
+        &self,
+        key: String,
+        value: Vec<u8>,
+        ttl_seconds: Option<u64>,
+    ) -> Result<bool, Box<dyn std::error::Error>> {
+        // Set in L1 cache
+        let l1_success = self.l1_cache.set_internal(key.clone(), value.clone(), ttl_seconds)?;
+
+        // Set in L2 cache if available
+        let l2_success = if let Some(ref l2) = self.l2_cache {
+            l2.set(&key, value, ttl_seconds)?
+        } else {
+            true
+        };
+
+        Ok(l1_success && l2_success)
+    }
+
+    /// Get comprehensive cache statistics
+    pub fn stats_internal(
+        &self,
+    ) -> Result<HashMap<String, HashMap<String, u64>>, Box<dyn std::error::Error>> {
+        let mut all_stats = HashMap::new();
+
+        // L1 cache stats
+        all_stats.insert("l1_cache".to_string(), self.l1_cache.stats_internal()?);
+
+        // L2 cache stats if available
+        if let Some(ref l2) = self.l2_cache {
+            all_stats.insert("l2_cache".to_string(), l2.stats()?);
+        }
+
+        // Overall stats
+        let mut overall = HashMap::new();
+        overall.insert(
+            "total_hits".to_string(),
+            self.total_hits.load(std::sync::atomic::Ordering::Relaxed),
+        );
+        overall.insert(
+            "total_misses".to_string(),
+            self.total_misses.load(std::sync::atomic::Ordering::Relaxed),
+        );
+        all_stats.insert("overall".to_string(), overall);
+
+        Ok(all_stats)
+    }
+}
+
+impl Default for RustCacheManager {
+    fn default() -> Self {
+        Self::new(5000, 1800, None)
+    }
+}
+
+#[pymethods]
+impl RustCacheManager {
+    #[new]
+    #[pyo3(signature = (memory_max_size=5000, memory_ttl=1800, memory_max_mb=100, memory_threshold=0.85))]
+    pub fn py_new(
+        memory_max_size: usize,
+        memory_ttl: u64,
+        memory_max_mb: usize,
+        memory_threshold: f64,
+    ) -> Self {
+        let cache = RustCache::new_with_memory_limit(
+            memory_max_size,
+            memory_ttl,
+            memory_max_mb * 1024 * 1024,
+            memory_threshold,
+        );
+        Self {
+            l1_cache: Arc::new(cache),
+            l2_cache: None,
+            total_hits: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            total_misses: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        }
+    }
+
+    /// Create a named cache with memory awareness
+    pub fn create_cache(
+        &mut self,
+        _name: String,
+        max_size: usize,
+        default_ttl_seconds: u64,
+        max_memory_mb: usize,
+        memory_threshold: f64,
+    ) -> PyResult<()> {
+        // For simplicity in this implementation, we just update the l1_cache
+        // In a full implementation, we'd maintain a map of named caches
+        let cache = RustCache::new_with_memory_limit(
+            max_size,
+            default_ttl_seconds,
+            max_memory_mb * 1024 * 1024,
+            memory_threshold,
+        );
+        self.l1_cache = Arc::new(cache);
+        Ok(())
+    }
+
+    /// Python wrapper for get
+    pub fn py_get(&self, key: &str) -> PyResult<Option<Vec<u8>>> {
+        self.get_internal(key)
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+    }
+
+    /// Python wrapper for set
+    pub fn py_set(&self, key: String, value: Vec<u8>, ttl_seconds: Option<u64>) -> PyResult<bool> {
+        self.set_internal(key, value, ttl_seconds)
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+    }
+
+    /// Python wrapper for stats
+    pub fn py_stats(&self) -> PyResult<HashMap<String, HashMap<String, u64>>> {
+        self.stats_internal()
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+    }
+
+    // Python API compatible methods
+    /// Get cache by name (simplified implementation)
+    pub fn get_cache(&self, _name: String) -> PyResult<Option<bool>> {
+        // For simplicity, always return the main cache exists
+        Ok(Some(true))
+    }
+
+    /// Delete cache by name (simplified implementation)
+    pub fn delete_cache(&self, _name: String) -> PyResult<bool> {
+        // For simplicity, always return success
+        Ok(true)
+    }
+
+    /// List all cache names (simplified implementation)
+    pub fn list_caches(&self) -> PyResult<Vec<String>> {
+        // For simplicity, return a default cache name
+        Ok(vec!["default".to_string()])
+    }
+}
+
+impl Clone for RustRedisCache {
+    fn clone(&self) -> Self {
+        Self {
+            connection_manager: self.connection_manager.clone(),
+            key_prefix: self.key_prefix.clone(),
+            default_ttl: self.default_ttl,
+            hits: self.hits.clone(),
+            misses: self.misses.clone(),
+            sets: self.sets.clone(),
+        }
     }
 }

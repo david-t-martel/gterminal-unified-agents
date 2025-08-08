@@ -1,0 +1,93 @@
+{
+  "mcpServers": {
+    "rust-fs": {
+      "command": "/home/david/.local/bin/rust-fs",
+      "args": ["--mode", "mcp", "--protocol", "stdio"],
+      "env": {
+        "RUST_LOG": "info",
+        "RUST_FS_MAX_CONCURRENT": "16",
+        "RUST_FS_ENABLE_CACHE": "true"
+      },
+      "timeout": 30000,
+      "restart": true,
+      "description": "High-performance filesystem operations server with SIMD acceleration and caching"
+    },
+    "rust-fetch": {
+      "command": "/home/david/.local/bin/rust-fetch",
+      "args": ["--mode", "mcp", "--protocol", "stdio"],
+      "env": {
+        "RUST_LOG": "info",
+        "HTTP_TIMEOUT": "30",
+        "RUST_FETCH_CACHE_SIZE": "1000",
+        "RUST_FETCH_SECURITY_LEVEL": "production"
+      },
+      "timeout": 45000,
+      "restart": true,
+      "description": "Secure HTTP content retrieval with authentication, caching, and SSRF protection"
+    },
+    "rust-memory": {
+      "command": "/home/david/.local/bin/rust-memory",
+      "args": ["--mode", "mcp", "--protocol", "stdio"],
+      "env": {
+        "RUST_LOG": "info",
+        "RUST_MEMORY_BACKUP_ENABLED": "true",
+        "RUST_MEMORY_SEARCH_LIMIT": "1000"
+      },
+      "timeout": 30000,
+      "restart": true,
+      "description": "Knowledge graph memory system with JSONL persistence and semantic search"
+    },
+    "rust-bridge": {
+      "command": "/home/david/.local/bin/rust-bridge",
+      "args": ["mcp", "--protocol", "stdio"],
+      "env": {
+        "RUST_LOG": "info",
+        "RUST_BRIDGE_CACHE_PATHS": "true",
+        "RUST_BRIDGE_SECURITY": "strict"
+      },
+      "timeout": 30000,
+      "restart": true,
+      "description": "Cross-platform WSL ↔ Windows communication bridge with secure execution"
+    },
+    "rust-link": {
+      "command": "/home/david/.local/bin/rust-link",
+      "args": ["--mode", "mcp", "--protocol", "stdio"],
+      "env": {
+        "RUST_LOG": "info",
+        "RUST_LINK_MAX_AGENTS": "50",
+        "RUST_LINK_DISCOVERY_TIMEOUT": "10"
+      },
+      "timeout": 30000,
+      "restart": true,
+      "description": "Inter-agent communication framework for distributed agent workflows"
+    },
+    "rust-sequential-thinking": {
+      "command": "/home/david/.local/bin/rust-sequential-thinking",
+      "args": ["mcp"],
+      "env": {
+        "RUST_LOG": "info",
+        "RUST_THINKING_MAX_THOUGHTS": "50",
+        "RUST_THINKING_ENABLE_BRANCHING": "true"
+      },
+      "timeout": 30000,
+      "restart": true,
+      "description": "Structured reasoning and problem-solving with thought chains and branching logic"
+    }
+  },
+  "globalSettings": {
+    "logLevel": "info",
+    "maxConcurrentServers": 10,
+    "serverStartupTimeout": 10000,
+    "healthCheckInterval": 60000,
+    "enableMetrics": true,
+    "metricsPort": 9090
+  },
+  "security": {
+    "enableAuthentication": false,
+    "enableRateLimiting": true,
+    "defaultRateLimit": 100,
+    "trustedOrigins": ["localhost", "127.0.0.1"],
+    "enableAuditLogging": true,
+    "auditLogPath": "/home/david/.claude/logs/mcp-audit.log"
+  }
+}

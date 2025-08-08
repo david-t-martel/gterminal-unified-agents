@@ -52,7 +52,7 @@ class CodeAnalysisTool(Tool):
                 return {"error": f"Unknown action: {action}"}
 
         except Exception as e:
-            logger.error(f"Code analysis failed: {e}")
+            logger.exception(f"Code analysis failed: {e}")
             return {"error": str(e)}
 
     async def _analyze_file(self, path: str) -> dict[str, Any]:

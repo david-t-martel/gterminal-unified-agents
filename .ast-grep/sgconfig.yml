@@ -1,0 +1,103 @@
+# AST-grep configuration for Gemini CLI Terminal
+# Comprehensive rule system extracted from my-fullstack-agent
+
+# Global configurations
+sourceFilePatterns:
+  - "**/*.py"
+  - "**/*.rs"
+
+# Output configuration
+outputFormat: "github"
+
+# Rule configuration
+rule:
+  # Import individual rules that actually exist
+  any:
+    # MCP patterns
+    - import: ".ast-grep/rules/mcp-tool-missing-schema.yml"
+
+    # Security patterns
+    - import: ".ast-grep/rules/hardcoded-api-key.yml"
+
+    # Performance patterns
+    - import: ".ast-grep/rules/slow-list-append-loop.yml"
+
+  # Custom rule directories
+  ruleDirs:
+    - ".ast-grep/rules"
+
+  # Severity levels
+  severity:
+    error: ["missing-imports", "undefined-variables", "type-errors"]
+    warning: ["deprecated-patterns", "performance-issues", "code-smells"]
+    info: ["style-issues", "documentation"]
+
+# Language-specific configurations
+languages:
+  python:
+    extensions: [".py", ".pyi"]
+    parser: "tree-sitter-python"
+    fixable: true
+
+  rust:
+    extensions: [".rs"]
+    parser: "tree-sitter-rust"
+    fixable: true
+
+# Project-specific patterns
+projectPatterns:
+  geminiCli:
+    description: "Gemini CLI patterns and issues"
+    patterns:
+      - "gemini_cli/**/*.py"
+      - "gterminal/**/*.py"
+      - "core/**/*.py"
+      - "terminal/**/*.py"
+
+  mcpServers:
+    description: "MCP Server patterns"
+    patterns:
+      - "mcp/**/*.py"
+
+  rustExtensions:
+    description: "Rust extensions (future)"
+    patterns:
+      - "gterminal_rust_extensions/**/*.rs"
+      - "src/**/*.rs"
+
+# Auto-fix configuration
+autoFix:
+  enabled: true
+  backup: true
+  backupDir: ".ast-grep/backups"
+
+  # Safe fixes that can be applied automatically
+  safeFixes:
+    - "unused-imports"
+    - "redundant-parens"
+    - "trailing-whitespace"
+    - "missing-docstrings"
+
+  # Unsafe fixes that require confirmation
+  unsafeFixes:
+    - "type-annotations"
+    - "error-handling"
+    - "async-patterns"
+
+# Performance scanning
+performance:
+  enabled: true
+  patterns:
+    - "blocking-io"
+    - "unnecessary-copies"
+    - "inefficient-loops"
+    - "memory-leaks"
+
+# Security scanning
+security:
+  enabled: true
+  patterns:
+    - "hardcoded-secrets"
+    - "sql-injection"
+    - "path-traversal"
+    - "unsafe-deserialiation"

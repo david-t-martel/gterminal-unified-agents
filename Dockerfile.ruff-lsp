@@ -1,0 +1,348 @@
+# Ruff LSP Server with AI Integration
+# Optimized for real-time Python diagnostics and AI-powered code suggestions
+
+FROM python:3.12-slim
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    curl \
+    wget \
+    git \
+    ca-certificates \
+    netcat-traditional \
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean
+
+# Create non-root user
+RUN groupadd -r ruff-lsp && useradd -r -g ruff-lsp -d /app -s /bin/bash ruff-lsp
+
+# Install Python dependencies
+RUN pip install --no-cache-dir \
+    ruff \
+    ruff-lsp \
+    fastapi \
+    uvicorn \
+    websockets \
+    aiohttp \
+    aiofiles \
+    pydantic \
+    python-multipart \
+    psutil
+
+# Set working directory
+WORKDIR /app
+
+# Copy LSP integration files
+COPY gterminal/lsp/ ./lsp/
+COPY scripts/rufft-claude.sh ./
+COPY requirements.txt ./
+
+# Install additional dependencies from requirements
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Create cache and log directories
+RUN mkdir -p /cache /logs /config \
+    && chown -R ruff-lsp:ruff-lsp /cache /logs /config
+
+# Create LSP server configuration
+RUN cat > /config/ruff-lsp.json << 'EOF'
+{
+"server": {
+"host": "0.0.0.0",
+"port": 8767,
+"metrics_port": 8768
+},
+"lsp": {
+"workspace_path": "/workspace",
+"max_concurrent_requests": 10,
+"timeout_seconds": 30,
+"cache_enabled": true,
+"cache_size": 1000
+},
+"ai_integration": {
+"enabled": true,
+"provider": "claude",
+"model": "haiku",
+"max_suggestions": 5,
+"suggestion_timeout": 15
+},
+"diagnostics": {
+"auto_fix_enabled": true,
+"severity_levels": ["error", "warning", "info"],
+"debounce_ms": 100,
+"batch_size": 50
+},
+"performance": {
+"worker_threads": 4,
+"max_memory_mb": 512,
+"gc_threshold": 100
+}
+}
+EOF
+
+# Create LSP server script
+RUN cat > /app/lsp-server.py << 'EOF'
+#!/usr/bin/env python3
+"""
+Enhanced Ruff LSP Server with AI Integration
+Provides real-time Python diagnostics with AI-powered suggestions
+"""
+
+import asyncio
+import json
+import logging
+import os
+import sys
+import time
+from pathlib import Path
+from typing import Dict, List, Optional, Any
+import aiohttp
+from fastapi import FastAPI, WebSocket, HTTPException
+from fastapi.responses import JSONResponse
+import uvicorn
+from pydantic import BaseModel
+
+# Configure logging
+logging.basicConfig(
+level=logging.INFO,
+format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+handlers=[
+logging.FileHandler('/logs/ruff-lsp.log'),
+logging.StreamHandler()
+]
+)
+logger = logging.getLogger(__name__)
+
+app = FastAPI(title="Ruff LSP Server", version="1.0.0")
+
+class LSPMetrics:
+def __init__(self):
+self.requests_sent = 0
+self.diagnostics_received = 0
+self.avg_response_time_ms = 0.0
+self.response_times = []
+self.start_time = time.time()
+
+def add_response_time(self, time_ms: float):
+self.response_times.append(time_ms)
+if len(self.response_times) > 100:  # Keep last 100
+self.response_times.pop(0)
+self.avg_response_time_ms = sum(self.response_times) / len(self.response_times)
+
+def to_dict(self) -> Dict[str, Any]:
+return {
+"requests_sent": self.requests_sent,
+"diagnostics_received": self.diagnostics_received,
+"avg_response_time_ms": round(self.avg_response_time_ms, 2),
+"uptime_seconds": int(time.time() - self.start_time)
+}
+
+metrics = LSPMetrics()
+
+class DiagnosticRequest(BaseModel):
+file_path: str
+content: Optional[str] = None
+ai_suggestions: bool = True
+
+class DiagnosticResponse(BaseModel):
+file_path: str
+issues: List[Dict[str, Any]]
+ai_suggestions: Optional[List[str]] = None
+processing_time_ms: float
+
+@app.get("/health")
+async def health_check():
+"""Health check endpoint"""
+return {
+"status": "healthy",
+"service": "ruff-lsp-server",
+"uptime": int(time.time() - metrics.start_time),
+"timestamp": int(time.time())
+}
+
+@app.get("/metrics")
+async def get_metrics():
+"""Get performance metrics"""
+return metrics.to_dict()
+
+@app.post("/diagnostics", response_model=DiagnosticResponse)
+async def get_diagnostics(request: DiagnosticRequest):
+"""Get diagnostics for a Python file"""
+start_time = time.time()
+
+try:
+# Run Ruff diagnostics
+import subprocess
+
+if not Path(request.file_path).exists():
+raise HTTPException(status_code=404, detail="File not found")
+
+# Execute ruff check
+result = subprocess.run([
+'ruff', 'check',
+'--output-format=json',
+request.file_path
+], capture_output=True, text=True, timeout=30)
+
+issues = []
+if result.stdout:
+try:
+issues = json.loads(result.stdout)
+except json.JSONDecodeError:
+logger.warning(f"Failed to parse ruff output: {result.stdout}")
+
+metrics.diagnostics_received += len(issues)
+
+# Generate AI suggestions if requested
+ai_suggestions = []
+if request.ai_suggestions and issues:
+ai_suggestions = await generate_ai_suggestions(request.file_path, issues[:3])
+
+processing_time = (time.time() - start_time) * 1000
+metrics.add_response_time(processing_time)
+
+return DiagnosticResponse(
+file_path=request.file_path,
+issues=issues,
+ai_suggestions=ai_suggestions,
+processing_time_ms=processing_time
+)
+
+except subprocess.TimeoutExpired:
+raise HTTPException(status_code=408, detail="Diagnostic timeout")
+except Exception as e:
+logger.error(f"Diagnostic error: {e}")
+raise HTTPException(status_code=500, detail=str(e))
+
+async def generate_ai_suggestions(file_path: str, issues: List[Dict]) -> List[str]:
+"""Generate AI-powered fix suggestions"""
+try:
+# Extract issue descriptions
+issue_descriptions = [
+f"{issue.get('code', 'Unknown')}: {issue.get('message', '')}"
+for issue in issues
+]
+
+prompt = f"""
+Analyze these Python code issues from ruff linter:
+File: {file_path}
+Issues: {', '.join(issue_descriptions)}
+
+Provide 3 concise, actionable fix suggestions.
+"""
+
+# Call Claude API (if available)
+claude_api_key = os.getenv('CLAUDE_API_KEY')
+if claude_api_key:
+async with aiohttp.ClientSession() as session:
+async with session.post(
+'https://api.anthropic.com/v1/messages',
+headers={
+'Authorization': f'Bearer {claude_api_key}',
+'Content-Type': 'application/json'
+},
+json={
+'model': 'claude-3-haiku-20240307',
+'messages': [{'role': 'user', 'content': prompt}],
+'max_tokens': 200
+},
+timeout=15
+) as response:
+if response.status == 200:
+data = await response.json()
+content = data.get('content', [{}])[0].get('text', '')
+return [content.strip()]
+
+# Fallback suggestions
+return [
+f"Fix {len(issues)} code quality issues",
+"Review Python best practices",
+"Consider automated formatting with ruff format"
+]
+
+except Exception as e:
+logger.warning(f"AI suggestion generation failed: {e}")
+return []
+
+@app.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket):
+"""WebSocket endpoint for real-time diagnostics"""
+await websocket.accept()
+logger.info("WebSocket client connected")
+
+try:
+while True:
+# Wait for file change notifications
+data = await websocket.receive_text()
+message = json.loads(data)
+
+if message.get('type') == 'diagnose_file':
+file_path = message.get('file_path')
+if file_path:
+request = DiagnosticRequest(file_path=file_path)
+response = await get_diagnostics(request)
+await websocket.send_text(response.json())
+
+except Exception as e:
+logger.error(f"WebSocket error: {e}")
+finally:
+logger.info("WebSocket client disconnected")
+
+if __name__ == "__main__":
+config = {}
+config_path = "/config/ruff-lsp.json"
+
+if os.path.exists(config_path):
+with open(config_path) as f:
+config = json.load(f)
+
+server_config = config.get("server", {})
+host = server_config.get("host", "0.0.0.0")
+port = int(os.getenv("LSP_PORT", server_config.get("port", 8767)))
+
+logger.info(f"Starting Ruff LSP Server on {host}:{port}")
+
+uvicorn.run(
+app,
+host=host,
+port=port,
+log_level="info",
+access_log=True
+)
+EOF
+
+# Make scripts executable
+RUN chmod +x /app/lsp-server.py /app/rufft-claude.sh
+RUN chown -R ruff-lsp:ruff-lsp /app /config
+
+# Create startup script
+RUN cat > /app/start-lsp.sh << 'EOF'
+#!/bin/bash
+set -e
+
+echo "🔄 Starting Ruff LSP Server..."
+
+# Wait for workspace to be available
+if [ ! -d "/workspace" ]; then
+echo "⚠️  Workspace not mounted, creating placeholder"
+mkdir -p /workspace
+fi
+
+# Start LSP server
+exec python /app/lsp-server.py
+EOF
+
+RUN chmod +x /app/start-lsp.sh
+
+# Switch to non-root user
+USER ruff-lsp
+
+# Expose ports
+EXPOSE 8767 8768
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=20s --retries=3 \
+    CMD curl -f http://localhost:8768/health || exit 1
+
+# Start the LSP server
+CMD ["/app/start-lsp.sh"]

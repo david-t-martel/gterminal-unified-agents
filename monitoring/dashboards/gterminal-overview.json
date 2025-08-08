@@ -1,0 +1,334 @@
+{
+  "dashboard": {
+    "id": null,
+    "title": "GTerminal DevOps Overview",
+    "tags": ["gterminal", "devops", "rust", "python"],
+    "style": "dark",
+    "timezone": "browser",
+    "editable": true,
+    "graphTooltip": 1,
+    "time": {
+      "from": "now-1h",
+      "to": "now"
+    },
+    "refresh": "10s",
+    "version": 1,
+    "panels": [
+      {
+        "id": 1,
+        "title": "System Overview",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "count(up == 1)",
+            "legendFormat": "Services Up"
+          },
+          {
+            "expr": "count(up == 0)",
+            "legendFormat": "Services Down"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "color": {
+              "mode": "thresholds"
+            },
+            "thresholds": {
+              "steps": [
+                { "color": "red", "value": 0 },
+                { "color": "yellow", "value": 3 },
+                { "color": "green", "value": 8 }
+              ]
+            }
+          }
+        },
+        "gridPos": { "h": 6, "w": 6, "x": 0, "y": 0 }
+      },
+      {
+        "id": 2,
+        "title": "Rust Filewatcher Status",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "up{job=\"rust-filewatcher\"}",
+            "legendFormat": "Filewatcher Status"
+          },
+          {
+            "expr": "rust_filewatcher_websocket_connections",
+            "legendFormat": "WebSocket Connections"
+          },
+          {
+            "expr": "rust_filewatcher_event_queue_size",
+            "legendFormat": "Event Queue Size"
+          }
+        ],
+        "gridPos": { "h": 6, "w": 6, "x": 6, "y": 0 }
+      },
+      {
+        "id": 3,
+        "title": "Ruff LSP Performance",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "histogram_quantile(0.95, rate(ruff_lsp_request_duration_seconds_bucket[5m]))",
+            "legendFormat": "95th Percentile Response Time"
+          },
+          {
+            "expr": "rate(ruff_lsp_requests_total[5m])",
+            "legendFormat": "Requests per Second"
+          }
+        ],
+        "gridPos": { "h": 6, "w": 6, "x": 12, "y": 0 }
+      },
+      {
+        "id": 4,
+        "title": "GTerminal Application Health",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "up{job=\"gterminal-app\"}",
+            "legendFormat": "App Status"
+          },
+          {
+            "expr": "rate(http_requests_total[5m])",
+            "legendFormat": "HTTP Requests/sec"
+          }
+        ],
+        "gridPos": { "h": 6, "w": 6, "x": 18, "y": 0 }
+      },
+      {
+        "id": 5,
+        "title": "Filewatcher Event Rate",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "rate(rust_filewatcher_events_processed_total[5m])",
+            "legendFormat": "Events Processed/sec"
+          },
+          {
+            "expr": "rate(rust_filewatcher_events_received_total[5m])",
+            "legendFormat": "Events Received/sec"
+          }
+        ],
+        "xAxis": {
+          "show": true
+        },
+        "yAxes": [
+          {
+            "label": "Events/sec",
+            "show": true
+          }
+        ],
+        "gridPos": { "h": 8, "w": 12, "x": 0, "y": 6 }
+      },
+      {
+        "id": 6,
+        "title": "LSP Response Times",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "histogram_quantile(0.50, rate(ruff_lsp_request_duration_seconds_bucket[5m]))",
+            "legendFormat": "50th Percentile"
+          },
+          {
+            "expr": "histogram_quantile(0.95, rate(ruff_lsp_request_duration_seconds_bucket[5m]))",
+            "legendFormat": "95th Percentile"
+          },
+          {
+            "expr": "histogram_quantile(0.99, rate(ruff_lsp_request_duration_seconds_bucket[5m]))",
+            "legendFormat": "99th Percentile"
+          }
+        ],
+        "yAxes": [
+          {
+            "label": "Seconds",
+            "show": true
+          }
+        ],
+        "gridPos": { "h": 8, "w": 12, "x": 12, "y": 6 }
+      },
+      {
+        "id": 7,
+        "title": "Memory Usage",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "rust_filewatcher_memory_usage_bytes",
+            "legendFormat": "Rust Filewatcher"
+          },
+          {
+            "expr": "process_resident_memory_bytes{job=\"ruff-lsp\"}",
+            "legendFormat": "Ruff LSP"
+          },
+          {
+            "expr": "process_resident_memory_bytes{job=\"gterminal-app\"}",
+            "legendFormat": "GTerminal App"
+          }
+        ],
+        "yAxes": [
+          {
+            "label": "Bytes",
+            "show": true
+          }
+        ],
+        "gridPos": { "h": 8, "w": 12, "x": 0, "y": 14 }
+      },
+      {
+        "id": 8,
+        "title": "CPU Usage",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "rate(rust_filewatcher_cpu_usage_seconds_total[5m])",
+            "legendFormat": "Rust Filewatcher"
+          },
+          {
+            "expr": "rate(process_cpu_seconds_total{job=\"ruff-lsp\"}[5m])",
+            "legendFormat": "Ruff LSP"
+          },
+          {
+            "expr": "rate(process_cpu_seconds_total{job=\"gterminal-app\"}[5m])",
+            "legendFormat": "GTerminal App"
+          }
+        ],
+        "yAxes": [
+          {
+            "label": "CPU Cores",
+            "show": true
+          }
+        ],
+        "gridPos": { "h": 8, "w": 12, "x": 12, "y": 14 }
+      },
+      {
+        "id": 9,
+        "title": "Error Rates",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "rate(rust_filewatcher_errors_total[5m])",
+            "legendFormat": "Filewatcher Errors/sec"
+          },
+          {
+            "expr": "rate(ruff_lsp_errors_total[5m])",
+            "legendFormat": "LSP Errors/sec"
+          },
+          {
+            "expr": "rate(http_requests_total{status=~\"5..\"}[5m])",
+            "legendFormat": "HTTP 5xx Errors/sec"
+          }
+        ],
+        "yAxes": [
+          {
+            "label": "Errors/sec",
+            "show": true
+          }
+        ],
+        "gridPos": { "h": 8, "w": 12, "x": 0, "y": 22 }
+      },
+      {
+        "id": 10,
+        "title": "Infrastructure Status",
+        "type": "table",
+        "targets": [
+          {
+            "expr": "up",
+            "format": "table",
+            "instant": true
+          }
+        ],
+        "transformations": [
+          {
+            "id": "organize",
+            "options": {
+              "excludeByName": {
+                "__name__": true,
+                "Time": true
+              },
+              "indexByName": {
+                "job": 0,
+                "instance": 1,
+                "Value": 2
+              },
+              "renameByName": {
+                "job": "Service",
+                "instance": "Instance",
+                "Value": "Status"
+              }
+            }
+          }
+        ],
+        "fieldConfig": {
+          "overrides": [
+            {
+              "matcher": { "id": "byName", "options": "Status" },
+              "properties": [
+                {
+                  "id": "mappings",
+                  "value": [
+                    {
+                      "options": { "0": { "text": "Down", "color": "red" } },
+                      "type": "value"
+                    },
+                    {
+                      "options": { "1": { "text": "Up", "color": "green" } },
+                      "type": "value"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        "gridPos": { "h": 8, "w": 12, "x": 12, "y": 22 }
+      },
+      {
+        "id": 11,
+        "title": "AI Integration Metrics",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "rate(ruff_lsp_ai_requests_total[5m])",
+            "legendFormat": "AI Requests/sec"
+          },
+          {
+            "expr": "rate(ruff_lsp_ai_failures_total[5m])",
+            "legendFormat": "AI Failures/sec"
+          },
+          {
+            "expr": "histogram_quantile(0.95, rate(ruff_lsp_ai_request_duration_seconds_bucket[5m]))",
+            "legendFormat": "AI Response Time (95th)"
+          }
+        ],
+        "gridPos": { "h": 8, "w": 12, "x": 0, "y": 30 }
+      },
+      {
+        "id": 12,
+        "title": "Dashboard Activity",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "dashboard_websocket_connections",
+            "legendFormat": "Active Connections"
+          },
+          {
+            "expr": "rate(dashboard_updates_total[5m])",
+            "legendFormat": "Updates/sec"
+          }
+        ],
+        "gridPos": { "h": 8, "w": 12, "x": 12, "y": 30 }
+      }
+    ],
+    "annotations": {
+      "list": [
+        {
+          "name": "Deployments",
+          "datasource": "Prometheus",
+          "enable": true,
+          "expr": "increase(deployment_timestamp[1m])",
+          "iconColor": "blue",
+          "titleFormat": "Deployment"
+        }
+      ]
+    }
+  }
+}

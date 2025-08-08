@@ -1,0 +1,348 @@
+# AST-grep Rules for JSON RPC 2.0 Transformation
+#
+# These rules help automate the transformation of existing agent methods
+# to be RPC-compliant using AST-grep pattern matching and replacement.
+#
+# Usage:
+#   ast-grep --config ast_grep_rules.yaml scan path/to/file.py
+#   ast-grep --config ast_grep_rules.yaml rewrite path/to/file.py
+
+rules:
+  # Rule 1: Transform legacy response patterns to RPC responses
+  - id: legacy-success-response
+    message: "Convert legacy success response to RPC format"
+    language: python
+    pattern: |
+      return {
+        "status": "success",
+        "data": $DATA,
+        $$$REST
+      }
+    fix: |
+      return create_success_response(
+          result=$DATA,
+          request_id=request.id if hasattr(locals(), 'request') and request else None,
+          correlation_id=getattr(locals().get('request'), 'correlation_id', None),
+          agent_name=getattr(self, 'agent_name', None)
+      )
+
+  # Rule 2: Transform legacy error responses to RPC errors
+  - id: legacy-error-response
+    message: "Convert legacy error response to RPC format"
+    language: python
+    pattern: |
+      return {
+        "status": "error", 
+        "error": $ERROR,
+        $$$REST
+      }
+    fix: |
+      return create_error_response(
+          RpcErrorCode.INTERNAL_ERROR,
+          message=str($ERROR),
+          request_id=getattr(locals().get('request'), 'id', None),
+          correlation_id=getattr(locals().get('request'), 'correlation_id', None),
+          agent_name=getattr(self, 'agent_name', None)
+      )
+
+  # Rule 3: Transform method signatures to RPC compliance
+  - id: agent-method-signature
+    message: "Transform agent method to RPC-compliant signature"
+    language: python  
+    pattern: |
+      async def $METHOD(self, $$$PARAMS) -> dict:
+          $$$BODY
+    fix: |
+      @rpc_method(method_name="$METHOD", validate_params=True)
+      async def $METHOD_rpc(
+          self,
+          params: Dict[str, Any],
+          session: Optional[SessionContext] = None
+      ) -> AgentTaskResult:
+          $$$BODY
+
+  # Rule 4: Identify methods that need parameter validation models
+  - id: needs-param-validation
+    message: "Method needs Pydantic parameter validation model"
+    language: python
+    pattern: |
+      async def $METHOD(self, $PARAM: dict, $$$REST):
+          $$$BODY
+    severity: warning
+
+  # Rule 5: Convert dictionary return types to AgentTaskResult
+  - id: dict-return-to-task-result
+    message: "Convert dict return to AgentTaskResult"
+    language: python
+    pattern: |
+      return {
+        $$$ITEMS
+      }
+    where:
+      not:
+        has:
+          pattern: '"status"'
+      not:
+        has: 
+          pattern: '"error"'
+    fix: |
+      return create_agent_task_result(
+          task_id=str(uuid.uuid4()),
+          task_type="$METHOD_TYPE",
+          data={$$$ITEMS},
+          duration_ms=(time.time() - start_time) * 1000 if 'start_time' in locals() else 0.0
+      )
+
+  # Rule 6: Add timing measurement to methods
+  - id: add-timing-measurement
+    message: "Add timing measurement to RPC method"
+    language: python
+    pattern: |
+      @rpc_method($$$ARGS)
+      async def $METHOD($$$PARAMS):
+          $FIRST_STMT
+          $$$REST
+    fix: |
+      @rpc_method($$$ARGS)
+      async def $METHOD($$$PARAMS):
+          task_id = str(uuid.uuid4())
+          start_time = time.time()
+          $FIRST_STMT
+          $$$REST
+
+  # Rule 7: Convert manual error handling to exceptions
+  - id: manual-error-to-exception
+    message: "Convert manual error returns to exceptions"
+    language: python
+    pattern: |
+      if $CONDITION:
+          return {"error": $ERROR_MSG, $$$REST}
+    fix: |
+      if $CONDITION:
+          raise ValueError($ERROR_MSG)
+
+  # Rule 8: Add required imports for RPC transformation
+  - id: add-rpc-imports
+    message: "Add required imports for RPC compliance"
+    language: python
+    pattern: |
+      from $$$IMPORTS
+    fix: |
+      from $$$IMPORTS
+      from typing import Any, Dict, Optional
+      from app.core.rpc.models import RpcRequest, RpcResponse, RpcErrorCode, AgentTaskResult
+      from app.core.rpc.patterns import rpc_method, RpcAgentMixin, create_agent_task_result, create_success_response, create_error_response
+      import uuid
+      import time
+
+  # Rule 9: Transform BaseAgentService inheritance to include RpcAgentMixin
+  - id: add-rpc-mixin
+    message: "Add RpcAgentMixin to agent class"
+    language: python
+    pattern: |
+      class $CLASS(BaseAgentService):
+          $$$BODY
+    fix: |
+      class $CLASS(BaseAgentService, RpcAgentMixin):
+          $$$BODY
+
+  # Rule 10: Convert exception handling to RPC-compliant format
+  - id: exception-handling-rpc
+    message: "Convert exception handling to RPC format"
+    language: python
+    pattern: |
+      try:
+          $$$TRY_BODY
+      except $EXCEPTION as $VAR:
+          return {"error": $$$ERROR_HANDLING}
+    fix: |
+      try:
+          $$$TRY_BODY
+      except $EXCEPTION as $VAR:
+          # Exception will be automatically handled by @rpc_method decorator
+          raise $VAR
+
+  # Rule 11: Identify file operation methods that need specific error codes
+  - id: file-operation-errors
+    message: "File operation should use specific error codes"
+    language: python
+    pattern: |
+      except FileNotFoundError:
+          $$$BODY
+    fix: |
+      except FileNotFoundError as e:
+          # Will be automatically converted to RpcErrorCode.FILE_NOT_FOUND
+          raise e
+
+  # Rule 12: Convert validation logic to raise exceptions
+  - id: validation-to-exception
+    message: "Convert validation returns to exceptions"
+    language: python
+    pattern: |
+      if not $PARAM:
+          return {"error": "$ERROR_MSG"}
+    fix: |
+      if not $PARAM:
+          raise ValueError("$ERROR_MSG")
+
+  # Rule 13: Transform job execution patterns
+  - id: job-execution-pattern
+    message: "Transform job execution to RPC pattern"
+    language: python
+    pattern: |
+      job_type = $JOB_TYPE
+      parameters = $PARAMS
+      if job_type == $TYPE_CHECK:
+          return await self.$METHOD($$$ARGS)
+    fix: |
+      # RPC method routing should be handled by method registry
+      # Individual methods should be decorated with @rpc_method
+      return await self.$METHOD_rpc(params=$PARAMS, session=session)
+
+  # Rule 14: Add session parameter to method signatures
+  - id: add-session-parameter
+    message: "Add session parameter to RPC method"
+    language: python
+    pattern: |
+      @rpc_method($$$DECORATOR_ARGS)
+      async def $METHOD(self, $$$EXISTING_PARAMS) -> $RETURN_TYPE:
+          $$$BODY
+    fix: |
+      @rpc_method($$$DECORATOR_ARGS)
+      async def $METHOD(
+          self,
+          $$$EXISTING_PARAMS,
+          session: Optional[SessionContext] = None
+      ) -> $RETURN_TYPE:
+          $$$BODY
+
+  # Rule 15: Convert create_success_response usage
+  - id: legacy-create-success-response
+    message: "Update create_success_response call to use new signature"
+    language: python
+    pattern: |
+      self.create_success_response($DATA, $MSG)
+    fix: |
+      create_success_response(
+          result=$DATA,
+          correlation_id=getattr(locals().get('request'), 'correlation_id', None),
+          agent_name=getattr(self, 'agent_name', None)
+      )
+
+  # Rule 16: Convert create_error_response usage
+  - id: legacy-create-error-response  
+    message: "Update create_error_response call to use new signature"
+    language: python
+    pattern: |
+      self.create_error_response($ERROR)
+    fix: |
+      create_error_response(
+          RpcErrorCode.INTERNAL_ERROR,
+          message=str($ERROR),
+          correlation_id=getattr(locals().get('request'), 'correlation_id', None),
+          agent_name=getattr(self, 'agent_name', None)
+      )
+
+# Utility rules for analysis
+analysis_rules:
+  # Find all methods that need transformation
+  - id: find-agent-methods
+    message: "Agent method that may need RPC transformation"
+    language: python
+    pattern: |
+      class $CLASS(BaseAgentService$$$):
+          $$$METHODS
+          async def $METHOD(self, $$$PARAMS) -> dict:
+              $$$BODY
+
+  # Find inconsistent error patterns
+  - id: inconsistent-errors
+    message: "Inconsistent error return pattern"
+    language: python
+    pattern: |
+      return {$$$KEYS}
+    where:
+      any:
+        - has:
+            pattern: '"error"'
+        - has:
+            pattern: '"failed"'
+        - has:
+            pattern: '"success"'
+
+  # Find methods without proper typing
+  - id: missing-type-hints
+    message: "Method missing proper type hints"
+    language: python
+    pattern: |
+      async def $METHOD(self, $PARAM):
+          $$$BODY
+    severity: info
+
+# Transform patterns for specific agent types
+specific_transforms:
+  # Code generation agent patterns
+  - id: code-gen-transform
+    message: "Transform code generation method"
+    language: python
+    pattern: |
+      async def generate_code(self, specification: dict) -> dict:
+          $$$BODY
+    fix: |
+      @rpc_method(method_name="generate_code", timeout_seconds=300, validate_params=True)
+      async def generate_code_rpc(
+          self,
+          params: CodeGenerationParams,
+          session: Optional[SessionContext] = None
+      ) -> AgentTaskResult:
+          $$$BODY
+
+  # Workspace analyzer patterns  
+  - id: workspace-analyzer-transform
+    message: "Transform workspace analyzer method"
+    language: python
+    pattern: |
+      async def analyze_workspace(self, project_path: str, $$$PARAMS) -> dict:
+          $$$BODY
+    fix: |
+      @rpc_method(method_name="analyze_workspace", timeout_seconds=600, validate_params=True)
+      async def analyze_workspace_rpc(
+          self,
+          params: WorkspaceAnalysisParams,
+          session: Optional[SessionContext] = None
+      ) -> AgentTaskResult:
+          $$$BODY
+
+# Validation rules
+validation:
+  # Ensure RPC methods have proper decorators
+  - id: missing-rpc-decorator
+    message: "RPC method missing @rpc_method decorator"
+    language: python
+    pattern: |
+      async def $METHOD_rpc(self, params: $PARAM_TYPE, session: $$$) -> AgentTaskResult:
+          $$$BODY
+    where:
+      not:
+        precedes:
+          pattern: "@rpc_method"
+
+  # Ensure proper parameter types
+  - id: validate-param-types
+    message: "RPC method should use Pydantic model for parameters"
+    language: python
+    pattern: |
+      @rpc_method($$$)
+      async def $METHOD(self, params: Dict[str, Any], $$$) -> $RETURN:
+          $$$BODY
+    severity: warning
+
+  # Ensure proper return types
+  - id: validate-return-types
+    message: "RPC method should return AgentTaskResult"
+    language: python
+    pattern: |
+      @rpc_method($$$)
+      async def $METHOD($$$PARAMS) -> dict:
+          $$$BODY
+    severity: error

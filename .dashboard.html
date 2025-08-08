@@ -1,0 +1,147 @@
+<!doctype html>
+<html>
+  <head>
+    <title>GTerminal Development Dashboard</title>
+    <meta charset="utf-8" />
+    <meta http-equiv="refresh" content="5" />
+    <style>
+      body {
+        font-family: monospace;
+        background: #1e1e1e;
+        color: #d4d4d4;
+        margin: 20px;
+      }
+      .header {
+        border-bottom: 2px solid #007acc;
+        padding: 10px 0;
+        margin-bottom: 20px;
+      }
+      .metric {
+        background: #252526;
+        padding: 15px;
+        margin: 10px 0;
+        border-radius: 5px;
+      }
+      .metric h3 {
+        margin: 0 0 10px 0;
+        color: #4ec9b0;
+      }
+      .status {
+        display: inline-block;
+        padding: 3px 8px;
+        border-radius: 3px;
+        margin: 2px;
+      }
+      .success {
+        background: #4caf50;
+        color: white;
+      }
+      .warning {
+        background: #ff9800;
+        color: white;
+      }
+      .error {
+        background: #f44336;
+        color: white;
+      }
+      .info {
+        background: #2196f3;
+        color: white;
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 20px;
+      }
+      .json {
+        background: #2d2d30;
+        padding: 10px;
+        border-radius: 5px;
+        overflow-x: auto;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="header">
+      <h1>🚀 GTerminal Development Dashboard</h1>
+      <p>Real-time development metrics and tool status</p>
+    </div>
+
+    <div class="grid">
+      <div class="metric">
+        <h3>📊 Quick Status</h3>
+        <div id="quickStatus">Loading...</div>
+      </div>
+
+      <div class="metric">
+        <h3>🛠️ Tool Performance</h3>
+        <div id="toolPerformance">Loading...</div>
+      </div>
+    </div>
+
+    <div class="metric">
+      <h3>📋 Raw Data</h3>
+      <pre id="rawData" class="json">Loading...</pre>
+    </div>
+
+    <script>
+      async function updateDashboard() {
+        try {
+          const response = await fetch("/data");
+          const data = await response.json();
+
+          // Quick status
+          const quickStatus = document.getElementById("quickStatus");
+          quickStatus.innerHTML = `
+                    <span class="status ${
+                      data.status.ruff_issues > 0 ? "warning" : "success"
+                    }">
+                        Ruff: ${data.status.ruff_issues} issues
+                    </span>
+                    <span class="status ${
+                      data.status.ast_grep_issues > 0 ? "warning" : "success"
+                    }">
+                        AST-grep: ${data.status.ast_grep_issues} issues
+                    </span>
+                    <span class="status ${
+                      data.status.mypy_errors > 0 ? "error" : "success"
+                    }">
+                        MyPy: ${data.status.mypy_errors} errors
+                    </span>
+                    <span class="status info">Files: ${
+                      data.status.file_count
+                    }</span>
+                `;
+
+          // Tool performance
+          const toolPerf = document.getElementById("toolPerformance");
+          if (data.tools.performance) {
+            let perfHTML = "";
+            for (const [tool, time] of Object.entries(data.tools.performance)) {
+              const status =
+                time < 100 ? "success" : time < 500 ? "warning" : "error";
+              perfHTML += `<span class="status ${status}">${tool}: ${time}ms</span>`;
+            }
+            toolPerf.innerHTML = perfHTML;
+          } else {
+            toolPerf.innerHTML =
+              '<span class="status info">No performance data</span>';
+          }
+
+          // Raw data
+          document.getElementById("rawData").textContent = JSON.stringify(
+            data,
+            null,
+            2,
+          );
+        } catch (error) {
+          console.error("Dashboard update failed:", error);
+        }
+      }
+
+      // Update every 5 seconds
+      setInterval(updateDashboard, 5000);
+      updateDashboard();
+    </script>
+  </body>
+</html>

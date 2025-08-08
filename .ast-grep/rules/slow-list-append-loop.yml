@@ -1,0 +1,12 @@
+id: slow-list-append-loop
+message: "# FIXME: Use list comprehension instead of append in loop"
+severity: warning
+language: python
+rule:
+  pattern: |
+    $LIST = []
+    for $VAR in $ITER:
+        $LIST.append($EXPR)
+fix: |
+  $LIST = [$EXPR for $VAR in $ITER]
+note: "List comprehensions are typically 2-3x faster than append loops"

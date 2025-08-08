@@ -1,0 +1,99 @@
+[package]
+name = "gterminal-filewatcher"
+version = "1.0.0"
+edition = "2021"
+authors = ["Claude Code <noreply@anthropic.com>"]
+description = "High-performance filewatcher for gterminal project with real-time feedback"
+license = "MIT"
+repository = "https://github.com/davidtadams/gterminal"
+
+[dependencies]
+# Core async runtime and utilities
+tokio = { version = "1.40", features = ["full"] }
+tokio-tungstenite = "0.23"  # WebSocket support
+tokio-util = { version = "0.7", features = ["codec"] }
+futures-util = "0.3"
+
+# File watching with high performance
+notify = "6.1"
+
+# HTTP and WebSocket server
+axum = "0.7"
+tower = "0.5"
+tower-http = { version = "0.6", features = ["cors", "trace", "compression"] }
+hyper = "1.0"
+
+# Serialization and data formats
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+toml = "0.8"
+
+# CLI and configuration
+clap = { version = "4.5", features = ["derive", "env"] }
+config = "0.14"
+
+# Logging and tracing
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+tracing-appender = "0.2"
+
+# Error handling
+anyhow = "1.0"
+thiserror = "1.0"
+
+# Utilities for performance
+dashmap = "6.0"  # Concurrent HashMap
+rayon = "1.10"  # Data parallelism
+crossbeam = "0.8"  # Channel communication
+once_cell = "1.19"  # Static initialization
+
+# Path and file operations
+walkdir = "2.5"
+glob = "0.3"
+regex = "1.10"
+
+# Time handling
+chrono = { version = "0.4", features = ["serde"] }
+
+# Process spawning and management
+which = "6.0"
+
+# Memory optimization
+mimalloc = { version = "0.1", default-features = false }
+
+# Networking and HTTP client
+reqwest = { version = "0.12", features = ["json"] }
+
+# MCP protocol support
+uuid = { version = "1.10", features = ["v4"] }
+
+[dev-dependencies]
+tempfile = "3.8"
+tokio-test = "0.4"
+criterion = { version = "0.5", features = ["html_reports"] }
+walkdir = "2.5"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+panic = "abort"
+strip = true
+
+[profile.dev]
+opt-level = 1
+debug = true
+
+[profile.bench]
+opt-level = 3
+lto = true
+codegen-units = 1
+debug = false
+
+[[bin]]
+name = "gterminal-filewatcher"
+path = "src/main.rs"
+
+[[bench]]
+name = "file_processing"
+harness = false

@@ -1,7 +1,9 @@
 ## Description
+
 Brief description of the changes made.
 
 ## Type of Change
+
 - [ ] Bug fix (non-breaking change which fixes an issue)
 - [ ] New feature (non-breaking change which adds functionality)
 - [ ] Breaking change (fix or feature that would cause existing functionality to not work as expected)
@@ -10,29 +12,34 @@ Brief description of the changes made.
 - [ ] Code refactoring
 
 ## Testing
+
 - [ ] Unit tests added/updated
 - [ ] Integration tests added/updated
 - [ ] Manual testing completed
 - [ ] All tests pass locally
 
 ## Security
+
 - [ ] Security implications considered
 - [ ] No sensitive data exposed
 - [ ] Authentication/authorization reviewed
 - [ ] Input validation implemented
 
 ## Performance
+
 - [ ] Performance impact assessed
 - [ ] No significant performance regression
 - [ ] Performance improvements documented
 
 ## Documentation
+
 - [ ] Code comments updated
 - [ ] README updated (if needed)
 - [ ] API documentation updated (if applicable)
 - [ ] Deployment notes updated (if needed)
 
 ## Checklist
+
 - [ ] My code follows the style guidelines of this project
 - [ ] I have performed a self-review of my own code
 - [ ] I have commented my code, particularly in hard-to-understand areas
@@ -43,10 +50,13 @@ Brief description of the changes made.
 - [ ] Any dependent changes have been merged and published
 
 ## Related Issues
+
 Closes #(issue number)
 
 ## Screenshots (if applicable)
+
 Add screenshots to help explain your changes.
 
 ## Additional Notes
+
 Any additional information that reviewers should know.

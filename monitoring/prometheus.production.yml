@@ -1,0 +1,238 @@
+# Prometheus Production Configuration
+# Comprehensive monitoring for GTerminal DevOps stack
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    cluster: "gterminal-production"
+    environment: "production"
+
+# Load alerting rules
+rule_files:
+  - "rules/*.yml"
+
+# Alertmanager configuration
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+            - alertmanager:9093
+
+# Scrape configurations
+scrape_configs:
+  # ======================
+  # Core Infrastructure
+  # ======================
+
+  - job_name: "prometheus"
+    static_configs:
+      - targets: ["localhost:9090"]
+    scrape_interval: 15s
+    metrics_path: /metrics
+
+  # ======================
+  # Rust Services
+  # ======================
+
+  - job_name: "rust-filewatcher"
+    static_configs:
+      - targets: ["rust-filewatcher:8766"]
+    scrape_interval: 10s
+    metrics_path: /metrics
+    scrape_timeout: 5s
+    honor_labels: true
+    params:
+      format: ["prometheus"]
+    metric_relabel_configs:
+      - source_labels: [__name__]
+        regex: "rust_filewatcher_.*"
+        target_label: service
+        replacement: "rust-filewatcher"
+
+  # ======================
+  # Python Services
+  # ======================
+
+  - job_name: "ruff-lsp"
+    static_configs:
+      - targets: ["ruff-lsp:8768"]
+    scrape_interval: 30s
+    metrics_path: /metrics
+    scrape_timeout: 10s
+    metric_relabel_configs:
+      - source_labels: [__name__]
+        regex: "ruff_lsp_.*"
+        target_label: service
+        replacement: "ruff-lsp"
+
+  - job_name: "gterminal-app"
+    static_configs:
+      - targets: ["gterminal-app:8000"]
+    scrape_interval: 15s
+    metrics_path: /metrics
+    scrape_timeout: 10s
+    metric_relabel_configs:
+      - source_labels: [__name__]
+        regex: "gterminal_.*"
+        target_label: service
+        replacement: "gterminal-app"
+
+  - job_name: "gterminal-mcp"
+    static_configs:
+      - targets: ["gterminal-mcp:3000"]
+    scrape_interval: 30s
+    metrics_path: /metrics
+
+  - job_name: "gterminal-react"
+    static_configs:
+      - targets: ["gterminal-react:8001"]
+    scrape_interval: 30s
+    metrics_path: /metrics
+
+  - job_name: "development-dashboard"
+    static_configs:
+      - targets: ["development-dashboard:8080"]
+    scrape_interval: 30s
+    metrics_path: /api/metrics
+    scrape_timeout: 5s
+
+  # ======================
+  # Infrastructure Services
+  # ======================
+
+  - job_name: "redis"
+    static_configs:
+      - targets: ["redis:6379"]
+    scrape_interval: 30s
+    metrics_path: /metrics
+    scheme: http
+
+  - job_name: "postgres"
+    static_configs:
+      - targets: ["postgres:5432"]
+    scrape_interval: 60s
+
+  - job_name: "nginx"
+    static_configs:
+      - targets: ["nginx:80"]
+    scrape_interval: 30s
+    metrics_path: /nginx_status
+    scheme: http
+
+  # ======================
+  # System Metrics
+  # ======================
+
+  - job_name: "node-exporter"
+    static_configs:
+      - targets: ["node-exporter:9100"]
+    scrape_interval: 15s
+    metric_relabel_configs:
+      - source_labels: [__name__]
+        regex: "(node_cpu_seconds_total|node_memory_MemTotal_bytes|node_memory_MemAvailable_bytes|node_filesystem_size_bytes|node_filesystem_avail_bytes|node_network_receive_bytes_total|node_network_transmit_bytes_total|node_load1|node_load5|node_load15)"
+        target_label: __tmp_keep
+        replacement: "keep"
+      - source_labels: [__tmp_keep]
+        regex: "keep"
+        target_label: __keep
+        replacement: ""
+      - regex: "__tmp_keep"
+        action: labeldrop
+
+  # ======================
+  # Container Metrics (cAdvisor)
+  # ======================
+
+  - job_name: "cadvisor"
+    static_configs:
+      - targets: ["cadvisor:8080"]
+    scrape_interval: 15s
+    metrics_path: /metrics
+    metric_relabel_configs:
+      - source_labels: [__name__]
+        regex: "container_.*"
+        target_label: __tmp_keep
+        replacement: "keep"
+      - source_labels: [container_label_com_docker_compose_service]
+        target_label: service
+      - regex: "__tmp_keep"
+        action: labeldrop
+
+  # ======================
+  # Application-Specific Metrics
+  # ======================
+
+  - job_name: "gterminal-custom-metrics"
+    static_configs:
+      - targets: ["gterminal-app:8000"]
+    scrape_interval: 15s
+    metrics_path: /api/metrics/custom
+    params:
+      format: ["prometheus"]
+    honor_labels: true
+
+  # ======================
+  # Blackbox Monitoring (Health Checks)
+  # ======================
+
+  - job_name: "blackbox-http"
+    metrics_path: /probe
+    params:
+      module: [http_2xx]
+    static_configs:
+      - targets:
+          - http://gterminal-app:8000/health
+          - http://ruff-lsp:8768/health
+          - http://development-dashboard:8080/health
+          - http://rust-filewatcher:8766/health
+          - http://grafana:3003/api/health
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: blackbox-exporter:9115
+
+  - job_name: "blackbox-tcp"
+    metrics_path: /probe
+    params:
+      module: [tcp_connect]
+    static_configs:
+      - targets:
+          - redis:6379
+          - postgres:5432
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: blackbox-exporter:9115
+
+# ======================
+# Remote Write Configuration (for long-term storage)
+# ======================
+
+remote_write:
+  - url: "http://victoria-metrics:8428/api/v1/write"
+    queue_config:
+      max_samples_per_send: 1000
+      batch_send_deadline: 5s
+      max_shards: 10
+    write_relabel_configs:
+      - source_labels: [__name__]
+        regex: "(up|rust_filewatcher_.*|ruff_lsp_.*|gterminal_.*)"
+        action: keep
+
+# ======================
+# Storage Configuration
+# ======================
+
+storage:
+  tsdb:
+    retention.time: 30d
+    retention.size: 10GB
+    path: /prometheus
+    wal-compression: true

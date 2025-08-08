@@ -1,0 +1,175 @@
+# Pre-commit hooks for Gemini CLI Terminal
+# Install with: pre-commit install
+# Run manually: pre-commit run --all-files
+
+default_language_version:
+  python: python3.12
+
+repos:
+  # ==================== General Hooks ====================
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.5.0
+    hooks:
+      - id: trailing-whitespace
+        exclude: "^tests/fixtures/"
+      - id: end-of-file-fixer
+        exclude: "^tests/fixtures/"
+      - id: check-yaml
+        args: ["--unsafe"]
+      - id: check-toml
+      - id: check-json
+        exclude: '.vscode/.*\.json$'
+      - id: check-added-large-files
+        args: ["--maxkb=1000"]
+      - id: check-case-conflict
+      - id: check-merge-conflict
+      - id: check-symlinks
+      - id: detect-private-key
+        exclude: "^tests/fixtures/keys/|^.*\\.archive/.*$"
+      - id: mixed-line-ending
+        args: ["--fix=lf"]
+
+  # ==================== Python Code Quality ====================
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.1.9
+    hooks:
+      - id: ruff
+        args: ["--fix", "--exit-non-zero-on-fix"]
+      - id: ruff-format
+
+  - repo: https://github.com/psf/black
+    rev: 23.12.1
+    hooks:
+      - id: black
+        language_version: python3.12
+        args: ["--line-length=100", "--target-version=py312"]
+
+  - repo: https://github.com/pycqa/isort
+    rev: 5.13.2
+    hooks:
+      - id: isort
+        args: ["--profile", "black", "--line-length=100"]
+
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.8.0
+    hooks:
+      - id: mypy
+        args: ["--ignore-missing-imports", "--show-error-codes"]
+        additional_dependencies:
+          - types-requests
+          - types-PyYAML
+          - types-setuptools
+        exclude: "^tests/fixtures/|^scripts/"
+
+  # ==================== Security Scanning ====================
+  - repo: https://github.com/PyCQA/bandit
+    rev: 1.7.6
+    hooks:
+      - id: bandit
+        args: ["-r", "gemini_cli", "-ll", "-x", "tests"]
+        files: '\.py$'
+
+  # ==================== Documentation ====================
+  - repo: https://github.com/pre-commit/mirrors-prettier
+    rev: v3.1.0
+    hooks:
+      - id: prettier
+        types_or: [yaml, json, markdown, html, css, javascript]
+        exclude: '^tests/fixtures/|\.min\.(js|css)$'
+
+  # ==================== Shell Scripts ====================
+  - repo: https://github.com/shellcheck-py/shellcheck-py
+    rev: v0.9.0.6
+    hooks:
+      - id: shellcheck
+        args: ["--severity=warning"]
+
+  # ==================== Custom Local Hooks ====================
+  - repo: local
+    hooks:
+      # Mock Detection
+      - id: mock-detection
+        name: Mock Test Detection
+        entry: python3 scripts/pre-commit-mock-detector.py
+        language: system
+        types: [python]
+        pass_filenames: true
+        require_serial: true
+        verbose: true
+        description: "Detect and fail on mock tests and stub implementations"
+
+      # Quality Check
+      - id: quality-check
+        name: Code Quality Check
+        entry: python3 scripts/pre-commit-quality-check.py
+        language: system
+        types: [python]
+        pass_filenames: true
+        require_serial: true
+        description: "Check for low quality code patterns"
+
+      # Unit tests
+      - id: pytest-unit
+        name: Run unit tests
+        entry: uv run pytest tests/ --tb=short -q
+        language: system
+        pass_filenames: false
+        stages: [pre-commit]
+        types: [python]
+
+      # Type checking
+      - id: type-check
+        name: Type checking with mypy
+        entry: uv run mypy gemini_cli --no-error-summary
+        language: system
+        pass_filenames: false
+        types: [python]
+
+      # ==================== MCP Validation Pipeline ====================
+
+      # MCP Configuration Validation
+      - id: mcp-config-validation
+        name: Validate MCP Configuration Files
+        entry: python3 scripts/validate-mcp-config.py
+        language: system
+        files: '\.mcp.*\.json$'
+        pass_filenames: true
+        description: "Validate MCP configuration syntax and structure"
+
+      # MCP Server Validation
+      - id: mcp-server-validation
+        name: Validate MCP Server Implementations
+        entry: python3 scripts/validate-mcp-servers.py
+        language: system
+        files: '^mcp/.*\.py$'
+        pass_filenames: true
+        description: "Validate MCP server implementations and schemas"
+
+      # MCP Inspector Compliance
+      - id: mcp-inspector-check
+        name: MCP Inspector Compliance Check
+        entry: bash scripts/mcp-inspector-check.sh
+        language: system
+        files: '\.mcp.*\.json$'
+        pass_filenames: true
+        description: "Run MCP Inspector validation"
+
+# Configuration for specific hooks
+exclude: |
+  (?x)^(
+    .*\.(min\.js|min\.css)|
+    build/|
+    dist/|
+    node_modules/|
+    \.venv/|
+    .*\.egg-info/|
+    __pycache__/|
+    \.pytest_cache/|
+    \.mypy_cache/|
+    \.ruff_cache/|
+    htmlcov/|
+    \.coverage
+  )$
+
+fail_fast: false
+minimum_pre_commit_version: "3.0.0"

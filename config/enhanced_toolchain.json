@@ -1,0 +1,137 @@
+{
+  "enhanced_toolchain": {
+    "version": "1.0.0",
+    "description": "Enhanced debugging and development tools integration for gterminal",
+    "integration_points": {
+      "rufft_claude": {
+        "script_path": "./scripts/rufft-claude.sh",
+        "auto_trigger": true,
+        "priority": 10,
+        "commands": {
+          "auto_fix": ["auto-fix"],
+          "ai_suggest": ["ai-suggest"],
+          "stream": ["stream"],
+          "analyze": ["analyze"],
+          "batch": ["ai-batch"]
+        }
+      },
+      "file_watchers": {
+        "enabled": true,
+        "debounce_delay": 2.0,
+        "watch_patterns": [".py", ".rs", ".ts", ".js", ".md"],
+        "ignore_patterns": [
+          "__pycache__", ".git", ".venv", "node_modules",
+          ".pytest_cache", ".mypy_cache", ".ruff_cache",
+          "target", "build", "dist", ".tmp", ".log"
+        ]
+      },
+      "external_tools": {
+        "ruff": {
+          "command": ["uv", "run", "ruff", "check"],
+          "file_patterns": [".py"],
+          "auto_trigger": true,
+          "timeout": 30,
+          "priority": 8
+        },
+        "mypy": {
+          "command": ["uv", "run", "mypy"],
+          "file_patterns": [".py"],
+          "auto_trigger": true,
+          "timeout": 60,
+          "priority": 7
+        },
+        "pytest": {
+          "command": ["uv", "run", "pytest", "-x", "--tb=short"],
+          "file_patterns": [".py"],
+          "auto_trigger": false,
+          "timeout": 120,
+          "priority": 9
+        },
+        "bandit": {
+          "command": ["uv", "run", "bandit", "-r"],
+          "file_patterns": [".py"],
+          "auto_trigger": false,
+          "timeout": 45,
+          "priority": 6
+        },
+        "cargo_check": {
+          "command": ["cargo", "check"],
+          "file_patterns": [".rs"],
+          "auto_trigger": true,
+          "timeout": 60,
+          "priority": 8
+        },
+        "cargo_clippy": {
+          "command": ["cargo", "clippy", "--", "-W", "clippy::all"],
+          "file_patterns": [".rs"],
+          "auto_trigger": true,
+          "timeout": 90,
+          "priority": 7
+        },
+        "eslint": {
+          "command": ["npx", "eslint"],
+          "file_patterns": [".js", ".ts", ".jsx", ".tsx"],
+          "auto_trigger": true,
+          "timeout": 30,
+          "priority": 7
+        },
+        "prettier": {
+          "command": ["npx", "prettier", "--check"],
+          "file_patterns": [".js", ".ts", ".jsx", ".tsx", ".json", ".md"],
+          "auto_trigger": true,
+          "timeout": 15,
+          "priority": 5
+        }
+      }
+    },
+    "monitoring": {
+      "websocket_port": 8767,
+      "real_time_updates": true,
+      "log_level": "INFO",
+      "metrics_collection": true
+    },
+    "deployment_integration": {
+      "enabled": true,
+      "pre_deployment_checks": [
+        "rufft_claude_auto",
+        "ruff",
+        "mypy",
+        "pytest"
+      ],
+      "security_scans": [
+        "bandit"
+      ],
+      "quality_gates": {
+        "min_test_coverage": 85,
+        "max_lint_errors": 0,
+        "max_security_issues": 0
+      }
+    },
+    "ai_integration": {
+      "claude_api": {
+        "enabled": true,
+        "model": "claude-3-sonnet-20240229",
+        "max_tokens": 4096,
+        "temperature": 0.1
+      },
+      "auto_suggestions": {
+        "enabled": true,
+        "trigger_on_errors": true,
+        "code_completion": true,
+        "refactoring_hints": true
+      }
+    },
+    "performance": {
+      "parallel_execution": true,
+      "max_concurrent_tools": 3,
+      "tool_caching": true,
+      "result_persistence": true
+    },
+    "notifications": {
+      "desktop": false,
+      "console": true,
+      "webhook": null,
+      "email": null
+    }
+  }
+}

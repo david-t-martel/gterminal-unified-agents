@@ -20,12 +20,14 @@ A production-ready unified terminal agent system combining high-performance Gemi
 ## 📋 Requirements
 
 ### System Requirements
+
 - **Python**: 3.11 or 3.12
 - **Rust**: Latest stable (1.70+)
 - **Node.js**: 18+ (for development tools)
 - **Operating System**: Linux (Ubuntu 20.04+), macOS 12+, Windows 11 with WSL2
 
 ### External Dependencies
+
 ```bash
 # Ubuntu/Debian
 sudo apt update && sudo apt install -y \
@@ -43,6 +45,7 @@ sudo apt update && sudo apt install -y fd-find ripgrep
 ```
 
 ### Cloud Services
+
 - **Google Cloud Platform** account with Vertex AI API enabled
 - Service account with appropriate permissions
 - Optional: Codecov account for coverage reporting
@@ -106,6 +109,7 @@ make health-check
 ### Authentication Setup
 
 1. **Service Account Configuration**:
+
 ```bash
 # Create service account key directory
 mkdir -p ~/.auth/business/
@@ -117,6 +121,7 @@ chmod 600 ~/.auth/business/service-account-key.json
 ```
 
 2. **Environment Configuration**:
+
 ```bash
 # Copy environment template
 cp .env.example .env
@@ -130,6 +135,7 @@ export GOOGLE_CLOUD_PROJECT="your-project-id"
 ```
 
 3. **Verification**:
+
 ```bash
 # Test authentication
 make check-auth
@@ -274,7 +280,7 @@ The project maintains 85%+ test coverage across all modules:
 
 - **Unit Tests**: Individual function and method testing
 - **Integration Tests**: Component interaction testing
-- **Performance Tests**: Benchmark validation and regression detection  
+- **Performance Tests**: Benchmark validation and regression detection
 - **Security Tests**: Vulnerability scanning and penetration testing
 - **E2E Tests**: Complete workflow validation
 
@@ -295,13 +301,13 @@ make test-ci
 
 ### Benchmarks (on modern hardware)
 
-| Operation | Traditional Python | With Rust Extensions | Improvement |
-|-----------|-------------------|---------------------|-------------|
-| File Search | 2.3s | 23ms | **100x** |
-| JSON Processing | 890ms | 12ms | **74x** |
-| Code Analysis | 5.2s | 180ms | **29x** |
-| Startup Time | 2.1s | 85ms | **25x** |
-| Memory Usage | 240MB | 95MB | **2.5x** |
+| Operation       | Traditional Python | With Rust Extensions | Improvement |
+| --------------- | ------------------ | -------------------- | ----------- |
+| File Search     | 2.3s               | 23ms                 | **100x**    |
+| JSON Processing | 890ms              | 12ms                 | **74x**     |
+| Code Analysis   | 5.2s               | 180ms                | **29x**     |
+| Startup Time    | 2.1s               | 85ms                 | **25x**     |
+| Memory Usage    | 240MB              | 95MB                 | **2.5x**    |
 
 ### Real-World Performance
 
@@ -325,7 +331,7 @@ make test-ci
 The project includes automated security scanning:
 
 - **Static Analysis**: Bandit, semgrep, CodeQL
-- **Dependency Scanning**: Safety, pip-audit, cargo-audit  
+- **Dependency Scanning**: Safety, pip-audit, cargo-audit
 - **Secret Detection**: GitGuardian, custom patterns
 - **Container Scanning**: Trivy, Snyk
 - **Infrastructure Scanning**: Terraform security analysis
@@ -333,6 +339,7 @@ The project includes automated security scanning:
 ### Vulnerability Reporting
 
 Report security issues privately:
+
 - Email: security@example.com
 - GitHub: Private security reporting
 - Response time: 48 hours for acknowledgment
@@ -371,18 +378,21 @@ kubectl apply -f manifests/
 ## 🛣️ Roadmap
 
 ### Version 2.0.0 (Q1 2025)
+
 - [ ] Multi-model support (Claude, GPT-4, Local LLMs)
 - [ ] Distributed agent orchestration
 - [ ] WebAssembly plugin system
 - [ ] Real-time collaboration features
 
-### Version 2.1.0 (Q2 2025)  
+### Version 2.1.0 (Q2 2025)
+
 - [ ] Visual workflow builder
 - [ ] Advanced analytics dashboard
 - [ ] Custom model fine-tuning
 - [ ] Mobile companion app
 
 ### Version 3.0.0 (Q3 2025)
+
 - [ ] Full multi-cloud support
 - [ ] Enterprise SSO integration
 - [ ] Advanced security features
@@ -428,11 +438,13 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 ## 🆘 Support
 
 ### Community Support
+
 - **Documentation**: [docs/README.md](docs/README.md)
 - **Discussions**: GitHub Discussions
 - **Issues**: GitHub Issues
 
 ### Enterprise Support
+
 - **Email**: enterprise@example.com
 - **SLA**: 24/7 support with guaranteed response times
 - **Training**: On-site training and consultation available
@@ -454,6 +466,7 @@ chmod 600 ~/.auth/business/service-account-key.json
 # Test authentication
 make check-auth
 ```
+
 </details>
 
 <details>
@@ -469,6 +482,7 @@ make clean-cache
 # Run performance benchmark
 make benchmark
 ```
+
 </details>
 
 <details>
@@ -485,6 +499,7 @@ make check-system
 # Verify installation
 make verify-install
 ```
+
 </details>
 
 ---

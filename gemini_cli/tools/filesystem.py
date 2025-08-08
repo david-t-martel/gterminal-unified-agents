@@ -54,9 +54,13 @@ class FilesystemTool(Tool):
                 return await self._list_files(path, params.get("pattern"))
             elif action == "search_files":
                 pattern = params.get("pattern")
+                if not pattern:
+                    return {"error": "Missing 'pattern' parameter for search_files"}
                 return await self._search_files(path, pattern)
             elif action == "search_content":
                 pattern = params.get("pattern")
+                if not pattern:
+                    return {"error": "Missing 'pattern' parameter for search_content"}
                 return await self._search_content(path, pattern)
             elif action == "analyze_workspace":
                 return await self.analyze_workspace(path)
@@ -64,7 +68,7 @@ class FilesystemTool(Tool):
                 return {"error": f"Unknown action: {action}"}
 
         except Exception as e:
-            logger.error(f"Filesystem operation failed: {e}")
+            logger.exception(f"Filesystem operation failed: {e}")
             return {"error": str(e)}
 
     async def _read_file(self, path: str) -> dict[str, Any]:
@@ -239,7 +243,7 @@ class FilesystemTool(Tool):
             return file_stats
 
         # Analyze file types
-        file_types = {}
+        file_types: dict[str, int] = {}
         code_files = []
         config_files = []
 

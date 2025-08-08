@@ -1,0 +1,26 @@
+{
+  "settings": {
+    "lint": {
+      "select": [
+        "E",
+        "F",
+        "I",
+        "B",
+        "C4",
+        "UP",
+        "ARG",
+        "SIM",
+        "TCH",
+        "PTH",
+        "ERA",
+        "PL",
+        "RUF"
+      ],
+      "ignore": ["E501", "PLR0913", "PLR0915", "RUF012"]
+    },
+    "format": {
+      "quote-style": "double",
+      "line-length": 100
+    }
+  }
+}

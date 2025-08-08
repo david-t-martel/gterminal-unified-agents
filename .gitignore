@@ -1,0 +1,185 @@
+# Cache files and temporary data
+__pycache__/
+*.py[cod]
+*.class
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+.env
+.venv/
+venv/
+ENV/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# IDEs and editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Testing
+.coverage
+.pytest_cache/
+htmlcov/
+.tox/
+coverage.xml
+*.cover
+.cache
+nosetests.xml
+
+# Logs and debugging artifacts
+*.log
+logs/
+gterminal_server.log
+debug_*.log
+test_*.log
+benchmark_*.log
+performance_*.log
+audit_*.log
+security_*.log
+deployment_*.log
+error_*.log
+access_*.log
+trace_*.log
+profiling_*.log
+
+# Test and coverage artifacts
+test-results/
+test-reports/
+coverage-reports/
+junit-reports/
+*.junit.xml
+pytest_*.xml
+coverage_*.xml
+htmlcov/
+.coverage.*
+.nyc_output/
+coverage/
+
+# Redis dumps and database artifacts
+dump.rdb
+*.rdb
+*.db
+*.sqlite
+*.sqlite3
+data/
+database/
+
+# Temporary files and staging
+tmp/
+temp/
+*.tmp
+*.temp
+staging/
+.staging/
+deploy/
+.deploy/
+
+# Rust build artifacts
+target/
+Cargo.lock
+
+# Documentation build
+docs/_build/
+
+# Environment variables
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Project specific
+.coverage_cache/
+performance_results/
+
+# Deployment and CI/CD artifacts
+.deployment/
+.ci/
+.pipeline/
+artifacts/
+releases/
+dist-*/
+build-*/
+docker-build/
+.terraform/
+*.tfstate
+*.tfstate.backup
+.terraform.lock.hcl
+helm-charts/charts/
+kubernetes-manifests/generated/
+
+# Monitoring and observability
+metrics/
+traces/
+alerts/
+dashboards/generated/
+.prometheus/
+.grafana/
+.jaeger/
+
+# Security and secrets (additional patterns)
+*.pem
+*.key
+*.crt
+*.p12
+*.jks
+secrets/
+.secrets/
+vault/
+.vault/
+auth-tokens/
+service-accounts/
+
+# Development tools and caches
+.rufft-claude/
+.ruff_cache/
+.mypy_cache/
+.bandit/
+.safety/
+.pre-commit-cache/
+node_modules/
+.npm/
+.yarn/
+package-lock.json
+yarn.lock
+
+# Performance and profiling
+.perf/
+profiling/
+benchmarks/results/
+memory-dumps/
+heap-dumps/
+flame-graphs/
+
+# Documentation and generated files
+docs/build/
+docs/generated/
+api-docs/
+schema-docs/
+openapi-generated/

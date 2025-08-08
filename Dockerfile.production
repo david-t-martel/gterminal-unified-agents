@@ -1,0 +1,221 @@
+# Production Dockerfile for GTerminal
+# Multi-stage build optimized for performance and security
+
+ARG PYTHON_VERSION=3.12
+ARG RUST_VERSION=1.75
+
+# ========================
+# Rust Builder Stage
+# ========================
+FROM rust:${RUST_VERSION}-slim as rust-builder
+
+WORKDIR /rust-build
+
+# Install dependencies
+RUN apt-get update && apt-get install -y \
+    pkg-config \
+    libssl-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy Rust filewatcher source
+COPY rust-filewatcher/ ./rust-filewatcher/
+
+# Build Rust filewatcher with optimizations
+WORKDIR /rust-build/rust-filewatcher
+RUN cargo build --release --features production
+
+# ========================
+# Python Builder Stage
+# ========================
+FROM python:${PYTHON_VERSION}-slim as python-builder
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    pkg-config \
+    libssl-dev \
+    libffi-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create virtual environment
+RUN python -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Install uv for fast package management
+RUN pip install --upgrade pip uv
+
+WORKDIR /app
+
+# Copy requirements and install dependencies
+COPY pyproject.toml uv.lock ./
+RUN uv sync --frozen --no-dev
+
+# ========================
+# Production Runtime Stage
+# ========================
+FROM python:${PYTHON_VERSION}-slim as production
+
+# Create non-root user for security
+RUN groupadd -r gterminal && useradd -r -g gterminal -d /app -s /bin/bash gterminal
+
+# Install runtime dependencies
+RUN apt-get update && apt-get install -y \
+    curl \
+    wget \
+    jq \
+    git \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean
+
+# Copy virtual environment from builder
+COPY --from=python-builder /opt/venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Copy Rust binaries from builder
+COPY --from=rust-builder /rust-build/rust-filewatcher/target/release/rust-filewatcher /usr/local/bin/
+COPY --from=rust-builder /rust-build/rust-filewatcher/target/release/filewatcher-cli /usr/local/bin/
+
+# Set working directory
+WORKDIR /app
+
+# Copy application source
+COPY --chown=gterminal:gterminal . .
+
+# Create required directories
+RUN mkdir -p /data /logs /config /cache \
+    && chown -R gterminal:gterminal /data /logs /config /cache
+
+# Install application in development mode for hot reloading
+RUN pip install -e .
+
+# Create healthcheck script
+RUN cat > /app/healthcheck.py << 'EOF'
+#!/usr/bin/env python3
+import sys
+import requests
+import os
+
+def check_health():
+try:
+port = os.environ.get('PORT', '8000')
+response = requests.get(f'http://localhost:{port}/health', timeout=5)
+if response.status_code == 200:
+print("✅ Health check passed")
+return 0
+else:
+print(f"❌ Health check failed: HTTP {response.status_code}")
+return 1
+except Exception as e:
+print(f"❌ Health check failed: {e}")
+return 1
+
+if __name__ == '__main__':
+sys.exit(check_health())
+EOF
+
+# Make healthcheck executable
+RUN chmod +x /app/healthcheck.py
+
+# Create startup script
+RUN cat > /app/startup.sh << 'EOF'
+#!/bin/bash
+set -e
+
+# Wait for dependencies
+echo "🔄 Waiting for database connection..."
+while ! nc -z ${DATABASE_HOST:-postgres} ${DATABASE_PORT:-5432}; do
+sleep 1
+done
+
+echo "🔄 Waiting for Redis..."
+while ! nc -z ${REDIS_HOST:-redis} ${REDIS_PORT:-6379}; do
+sleep 1
+done
+
+# Run database migrations if needed
+if [ "$RUN_MIGRATIONS" = "true" ]; then
+echo "🔄 Running database migrations..."
+python -m gterminal.db migrate
+fi
+
+# Start the application based on mode
+case "${START_MODE:-server}" in
+"server")
+echo "🚀 Starting GTerminal server..."
+exec gunicorn gterminal.server:app \
+    --bind 0.0.0.0:${PORT:-8000} \
+    --workers ${WORKERS:-4} \
+    --worker-class uvicorn.workers.UvicornWorker \
+    --timeout ${WORKER_TIMEOUT:-300} \
+    --keep-alive 2 \
+    --max-requests 1000 \
+    --max-requests-jitter 100
+;;
+"mcp")
+echo "🚀 Starting MCP server..."
+exec python -m gterminal.mcp.server \
+    --port ${MCP_PORT:-3000} \
+    --log-level ${MCP_LOG_LEVEL:-INFO}
+;;
+"react")
+echo "🚀 Starting ReAct agent..."
+exec python -m gterminal.react.server \
+    --port ${PORT:-8000} \
+    --log-level ${LOG_LEVEL:-INFO}
+;;
+"worker")
+echo "🚀 Starting background worker..."
+exec python -m gterminal.worker \
+    --concurrency ${WORKER_CONCURRENCY:-4}
+;;
+*)
+echo "❌ Unknown START_MODE: ${START_MODE}"
+exit 1
+;;
+esac
+EOF
+
+# Make startup script executable
+RUN chmod +x /app/startup.sh
+
+# Switch to non-root user
+USER gterminal
+
+# Expose ports
+EXPOSE 8000 3000
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD python /app/healthcheck.py
+
+# Use startup script as entrypoint
+ENTRYPOINT ["/app/startup.sh"]
+
+# ========================
+# Development Stage
+# ========================
+FROM production as development
+
+USER root
+
+# Install development dependencies
+RUN apt-get update && apt-get install -y \
+    vim \
+    tmux \
+    htop \
+    strace \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install development Python packages
+COPY requirements-dev.txt ./
+RUN pip install -r requirements-dev.txt
+
+# Enable hot reloading
+ENV DEVELOPMENT_MODE=true
+ENV PYTHONPATH=/app
+
+USER gterminal
+
+# Development command with hot reloading
+CMD ["python", "-m", "gterminal.server", "--reload", "--host", "0.0.0.0"]

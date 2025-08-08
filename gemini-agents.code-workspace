@@ -1,0 +1,177 @@
+{
+  "folders": [
+    {
+      "name": "gterminal",
+      "path": "."
+    },
+    {
+      "name": "py-gemini",
+      "path": "../py-gemini"
+    },
+    {
+      "name": "gapp",
+      "path": "../gapp"
+    },
+    {
+      "name": "unified-gapp-gterminal",
+      "path": "../unified-gapp-gterminal"
+    },
+    {
+      "name": "mcp",
+      "path": "../mcp"
+    }
+  ],
+  "settings": {
+    "python.defaultInterpreterPath": "/home/david/.local/share/uv/python/cpython-3.12.7-linux-x86_64-gnu/bin/python",
+    "files.watcherExclude": {
+      "**/.git/objects/**": true,
+      "**/.git/subtree-cache/**": true,
+      "**/node_modules/*/**": true,
+      "**/__pycache__/**": true,
+      "**/target/**": true,
+      "**/Cargo.lock": true
+    },
+    "python.analysis.typeCheckingMode": "strict",
+    "python.linting.enabled": true,
+    "python.linting.pylintEnabled": false,
+    "python.linting.flake8Enabled": false,
+    "python.linting.ruffEnabled": true,
+    "python.formatting.provider": "black",
+    "editor.formatOnSave": true,
+    "mcp.executeCommandsWithoutConfirmation": true,
+    "mcp.allowExecutableRuns": true,
+    "security.workspace.trust.enabled": false,
+    "task.allowAutomaticTasks": "on",
+    "mcp.servers": {
+      "rust-fs-optimized-server-a1b2c3d4": {
+        "command": "/home/david/.local/bin/rust-fs-optimized",
+        "args": [],
+        "env": {
+          "RUST_LOG": "debug",
+          "RUST_BACKTRACE": "1"
+        }
+      },
+      "rust-fetch-server-e5f6g7h8": {
+        "command": "/home/david/.local/bin/rust-fetch",
+        "args": [],
+        "env": {
+          "RUST_LOG": "info",
+          "HTTP_TIMEOUT": "30",
+          "MAX_CONCURRENT": "10"
+        }
+      },
+      "rust-memory-server-i9j0k1l2": {
+        "command": "/home/david/.local/bin/rust-memory",
+        "args": [],
+        "env": {
+          "RUST_LOG": "info",
+          "MEMORY_BACKEND": "sqlite",
+          "MAX_MEMORY_SIZE": "1GB"
+        }
+      },
+      "rust-bridge-server-m3n4o5p6": {
+        "command": "/home/david/.local/bin/rust-bridge",
+        "args": [],
+        "env": {
+          "RUST_LOG": "info",
+          "BRIDGE_MODE": "async"
+        }
+      },
+      "rust-link-server-q7r8s9t0": {
+        "command": "/home/david/.local/bin/rust-link",
+        "args": [],
+        "env": {
+          "RUST_LOG": "info",
+          "LINK_TIMEOUT": "60"
+        }
+      },
+      "rust-sequential-thinking-server-u1v2w3x4": {
+        "command": "/home/david/.local/bin/rust-sequential-thinking",
+        "args": [],
+        "env": {
+          "RUST_LOG": "info",
+          "MAX_THOUGHTS": "50"
+        }
+      },
+      "gterminal-mcp-server-y5z6a7b8": {
+        "command": "uv",
+        "args": ["run", "python", "-m", "gterminal.mcp.server"],
+        "cwd": "/home/david/agents/gterminal",
+        "env": {
+          "PYTHONPATH": "/home/david/agents/gterminal",
+          "GOOGLE_APPLICATION_CREDENTIALS": "/home/david/.auth/business/service-account-key.json",
+          "GOOGLE_CLOUD_PROJECT": "auricleinc-gemini"
+        }
+      },
+      "py-gemini-mcp-server-c9d0e1f2": {
+        "command": "uv",
+        "args": ["run", "python", "-m", "mcp.server"],
+        "cwd": "/home/david/agents/py-gemini",
+        "env": {
+          "PYTHONPATH": "/home/david/agents/py-gemini",
+          "GOOGLE_APPLICATION_CREDENTIALS": "/home/david/.auth/business/service-account-key.json",
+          "GOOGLE_CLOUD_PROJECT": "auricleinc-gemini",
+          "GOOGLE_GENAI_USE_VERTEXAI": "true"
+        }
+      },
+      "gapp-mcp-server-g3h4i5j6": {
+        "command": "uv",
+        "args": ["run", "python", "-m", "mcp.server"],
+        "cwd": "/home/david/agents/gapp",
+        "env": {
+          "PYTHONPATH": "/home/david/agents/gapp",
+          "GOOGLE_APPLICATION_CREDENTIALS": "/home/david/.auth/business/service-account-key.json",
+          "GOOGLE_CLOUD_PROJECT": "auricleinc-gemini"
+        }
+      },
+      "unified-mcp-server-k7l8m9n0": {
+        "command": "uv",
+        "args": ["run", "python", "-m", "mcp.server"],
+        "cwd": "/home/david/agents/unified-gapp-gterminal",
+        "env": {
+          "PYTHONPATH": "/home/david/agents/unified-gapp-gterminal",
+          "GOOGLE_APPLICATION_CREDENTIALS": "/home/david/.auth/business/service-account-key.json",
+          "GOOGLE_CLOUD_PROJECT": "auricleinc-gemini"
+        }
+      },
+      "redis-memory-mcp-server-o1p2q3r4": {
+        "command": "uv",
+        "args": ["run", "python", "-m", "mcp.server"],
+        "cwd": "/home/david/agents/mcp/redis",
+        "env": {
+          "PYTHONPATH": "/home/david/agents/mcp/redis",
+          "REDIS_HOST": "localhost",
+          "REDIS_PORT": "6379",
+          "REDIS_DB": "0"
+        }
+      },
+      "redis-memory-gpu-server-s5t6u7v8": {
+        "command": "uv",
+        "args": ["run", "python", "server.py"],
+        "cwd": "/home/david/agents/mcp/redis-memory-gpu",
+        "env": {
+          "PYTHONPATH": "/home/david/agents/mcp/redis-memory-gpu",
+          "REDIS_HOST": "localhost",
+          "REDIS_PORT": "6379",
+          "REDIS_DB": "1",
+          "GPU_ACCELERATION": "true",
+          "EMBEDDING_MODEL": "all-MiniLM-L6-v2",
+          "CUDA_VISIBLE_DEVICES": "0"
+        }
+      }
+    }
+  },
+  "extensions": {
+    "recommendations": [
+      "ms-python.python",
+      "ms-python.flake8",
+      "charliermarsh.ruff",
+      "ms-python.black-formatter",
+      "ms-vscode.makefile-tools",
+      "rust-lang.rust-analyzer",
+      "tamasfe.even-better-toml",
+      "redhat.vscode-yaml",
+      "ms-vscode.vscode-json"
+    ]
+  }
+}

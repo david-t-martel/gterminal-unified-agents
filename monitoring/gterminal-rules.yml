@@ -1,0 +1,235 @@
+# Prometheus alerting rules for GTerminal
+groups:
+  - name: gterminal.application
+    rules:
+      # Application availability
+      - alert: GTerminalDown
+        expr: up{job="gterminal-app"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "GTerminal application is down"
+          description: "GTerminal application has been down for more than 1 minute."
+
+      # High error rate
+      - alert: GTerminalHighErrorRate
+        expr: rate(gterminal_http_requests_total{status=~"5.."}[5m]) > 0.1
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High error rate in GTerminal"
+          description: "GTerminal error rate is {{ $value }} errors per second."
+
+      # High response time
+      - alert: GTerminalHighLatency
+        expr: histogram_quantile(0.95, rate(gterminal_http_request_duration_seconds_bucket[5m])) > 2
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High latency in GTerminal"
+          description: "95th percentile latency is {{ $value }} seconds."
+
+      # High memory usage
+      - alert: GTerminalHighMemoryUsage
+        expr: process_resident_memory_bytes{job="gterminal-app"} > 2e9
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High memory usage in GTerminal"
+          description: "Memory usage is {{ $value | humanize }}."
+
+  - name: gterminal.react
+    rules:
+      # ReAct agent availability
+      - alert: GTerminalReActDown
+        expr: up{job="gterminal-react"} == 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "GTerminal ReAct agent is down"
+          description: "ReAct agent has been down for more than 2 minutes."
+
+      # Long reasoning cycles
+      - alert: GTerminalLongReasoningCycles
+        expr: histogram_quantile(0.95, rate(gterminal_react_reasoning_duration_seconds_bucket[10m])) > 60
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Long reasoning cycles detected"
+          description: "95th percentile reasoning time is {{ $value }} seconds."
+
+      # High reasoning error rate
+      - alert: GTerminalReasoningErrors
+        expr: rate(gterminal_react_reasoning_errors_total[5m]) > 0.05
+        for: 3m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High reasoning error rate"
+          description: "Reasoning error rate is {{ $value }} errors per second."
+
+  - name: gterminal.mcp
+    rules:
+      # MCP server availability
+      - alert: GTerminalMCPDown
+        expr: up{job="gterminal-mcp"} == 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "GTerminal MCP server is down"
+          description: "MCP server {{ $labels.instance }} has been down for more than 2 minutes."
+
+      # MCP high response time
+      - alert: GTerminalMCPHighLatency
+        expr: histogram_quantile(0.95, rate(gterminal_mcp_request_duration_seconds_bucket[5m])) > 5
+        for: 3m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High MCP response time"
+          description: "95th percentile MCP response time is {{ $value }} seconds."
+
+      # MCP rate limiting
+      - alert: GTerminalMCPRateLimited
+        expr: rate(gterminal_mcp_rate_limited_total[5m]) > 0.1
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High rate limiting in MCP"
+          description: "MCP rate limiting events: {{ $value }} per second."
+
+  - name: gterminal.authentication
+    rules:
+      # High failed login rate
+      - alert: GTerminalHighFailedLogins
+        expr: rate(gterminal_auth_failed_logins_total[5m]) > 0.5
+        for: 3m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High failed login rate"
+          description: "Failed login rate is {{ $value }} per second."
+
+      # Suspicious authentication activity
+      - alert: GTerminalSuspiciousAuth
+        expr: rate(gterminal_auth_suspicious_activity_total[10m]) > 0.1
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Suspicious authentication activity detected"
+          description: "Suspicious auth activity: {{ $value }} events per second."
+
+  - name: gterminal.infrastructure
+    rules:
+      # Redis availability
+      - alert: GTerminalRedisDown
+        expr: up{job="redis"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Redis is down"
+          description: "Redis cache server is unavailable."
+
+      # High Redis memory usage
+      - alert: GTerminalRedisHighMemory
+        expr: redis_memory_used_bytes{job="redis"} / redis_config_maxmemory > 0.9
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Redis high memory usage"
+          description: "Redis memory usage is {{ $value | humanizePercentage }}."
+
+      # PostgreSQL availability
+      - alert: GTerminalPostgresDown
+        expr: up{job="postgres"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "PostgreSQL is down"
+          description: "PostgreSQL database server is unavailable."
+
+      # High database connection usage
+      - alert: GTerminalHighDBConnections
+        expr: pg_stat_database_numbackends{datname="gterminal"} > 80
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High database connection usage"
+          description: "Database connections: {{ $value }} active connections."
+
+  - name: gterminal.performance
+    rules:
+      # High CPU usage
+      - alert: GTerminalHighCPU
+        expr: rate(process_cpu_seconds_total{job="gterminal-app"}[5m]) * 100 > 80
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High CPU usage"
+          description: "CPU usage is {{ $value }}%."
+
+      # High disk usage
+      - alert: GTerminalHighDiskUsage
+        expr: (node_filesystem_size_bytes{mountpoint="/"} - node_filesystem_free_bytes{mountpoint="/"}) / node_filesystem_size_bytes{mountpoint="/"} > 0.9
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "High disk usage"
+          description: "Disk usage is {{ $value | humanizePercentage }}."
+
+      # High load average
+      - alert: GTerminalHighLoadAverage
+        expr: node_load15 > 2
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High system load"
+          description: "15-minute load average is {{ $value }}."
+
+  - name: gterminal.business
+    rules:
+      # Low request rate (potential issue)
+      - alert: GTerminalLowRequestRate
+        expr: rate(gterminal_http_requests_total[10m]) < 0.1
+        for: 15m
+        labels:
+          severity: info
+        annotations:
+          summary: "Low request rate detected"
+          description: "Request rate is {{ $value }} per second, which may indicate an issue."
+
+      # Session creation rate
+      - alert: GTerminalHighSessionCreation
+        expr: rate(gterminal_sessions_created_total[5m]) > 10
+        for: 5m
+        labels:
+          severity: info
+        annotations:
+          summary: "High session creation rate"
+          description: "Session creation rate is {{ $value }} per second."
+
+      # API key usage anomaly
+      - alert: GTerminalAPIKeyAnomalies
+        expr: increase(gterminal_api_key_usage_total[1h]) > 1000
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High API key usage detected"
+          description: "API key usage increased by {{ $value }} in the last hour."

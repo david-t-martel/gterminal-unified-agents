@@ -56,10 +56,12 @@ def main() -> int:
     except KeyboardInterrupt:
         click.echo("Interrupted by user", err=True)
         return 130
-    except Exception as e:
+    except (click.ClickException, OSError, ValueError, RuntimeError) as e:
         click.echo(f"Error: {e}", err=True)
         return 1
 
 
 if __name__ == "__main__":
-    main()
+    import sys
+
+    sys.exit(main())

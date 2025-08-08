@@ -3,9 +3,9 @@
 
 import importlib.util
 import os
+from pathlib import Path
 import sys
 import time
-from pathlib import Path
 
 
 def validate_structure():

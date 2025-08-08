@@ -1,0 +1,722 @@
+"""Secure authentication storage for GTerminal.
+
+Implements secure storage for users, API keys, sessions, and authentication data
+with enhanced security patterns and proper file permissions.
+"""
+
+from datetime import UTC
+from datetime import datetime
+import json
+import logging
+import os
+from pathlib import Path
+import secrets
+from typing import Any
+
+from .auth_models import APIKey
+from .auth_models import AuthEvent
+from .auth_models import Session
+from .auth_models import User
+
+logger = logging.getLogger(__name__)
+
+
+def get_secure_storage_path() -> Path:
+    """Get secure storage path with fallback options."""
+    # Try secure environment first
+    secure_path = os.getenv("AUTH_STORAGE_PATH")
+    if secure_path:
+        return Path(secure_path)
+
+    # Try project .secure directory
+    project_root = Path(__file__).parent.parent
+    secure_dir = project_root / ".secure" / "auth"
+    if secure_dir.parent.parent.exists():
+        return secure_dir
+
+    # Fallback to user config directory (better than /tmp)
+    fallback_path = Path.home() / ".config" / "gterminal" / "auth"
+    logger.warning(f"Using fallback auth storage path: {fallback_path}")
+    return fallback_path
+
+
+def sanitize_input(value: str, max_length: int = 255) -> str:
+    """Sanitize input to prevent injection attacks."""
+    if not isinstance(value, str):
+        raise ValueError("Input must be a string")
+
+    # Strip whitespace and limit length
+    sanitized = value.strip()[:max_length]
+
+    # Remove null bytes and other control characters
+    sanitized = "".join(char for char in sanitized if ord(char) >= 32 or char in "\t\n\r")
+
+    return sanitized
+
+
+def validate_file_path(file_path: Path, allowed_base: Path) -> bool:
+    """Validate file path to prevent directory traversal."""
+    try:
+        # Resolve the path and check if it's within allowed directory
+        resolved = file_path.resolve()
+        allowed_base_resolved = allowed_base.resolve()
+
+        # Check if the resolved path is within the allowed base
+        return str(resolved).startswith(str(allowed_base_resolved))
+    except (OSError, ValueError):
+        return False
+
+
+class AuthStorage:
+    """Authentication storage manager with enhanced security."""
+
+    def __init__(self, storage_path: Path | None = None):
+        self.storage_path = storage_path or get_secure_storage_path()
+        self.users_file = self.storage_path / "users.json"
+        self.api_keys_file = self.storage_path / "api_keys.json"
+        self.sessions_file = self.storage_path / "sessions.json"
+        self.events_file = self.storage_path / "auth_events.json"
+
+        # Ensure directory exists with secure permissions
+        self._setup_secure_storage()
+
+        # Initialize files if they don't exist
+        self._initialize_storage()
+
+        # In-memory cache for performance
+        self._users_cache: dict[str, User] = {}
+        self._api_keys_cache: dict[str, APIKey] = {}
+        self._sessions_cache: dict[str, Session] = {}
+        self._cache_loaded = False
+
+    def _setup_secure_storage(self) -> None:
+        """Setup secure storage directory with proper permissions."""
+        try:
+            # Create directory with restricted permissions
+            self.storage_path.mkdir(parents=True, exist_ok=True, mode=0o700)
+
+            # Ensure proper permissions on existing directory
+            os.chmod(self.storage_path, 0o700)
+
+            logger.info(f"Secure storage initialized at: {self.storage_path}")
+
+        except Exception as e:
+            logger.exception(f"Failed to setup secure storage: {e}")
+            raise
+
+    def _initialize_storage(self) -> None:
+        """Initialize storage files if they don't exist."""
+        for file_path, description in [
+            (self.users_file, "users"),
+            (self.api_keys_file, "API keys"),
+            (self.sessions_file, "sessions"),
+            (self.events_file, "auth events"),
+        ]:
+            if not file_path.exists():
+                self._save_json(file_path, {})
+                logger.info(f"Initialized {description} storage")
+
+    def _load_json(self, file_path: Path) -> dict[str, Any]:
+        """Safely load JSON from file with validation."""
+        if not validate_file_path(file_path, self.storage_path):
+            logger.error(f"Invalid file path: {file_path}")
+            return {}
+
+        try:
+            if file_path.exists():
+                # Check file permissions
+                file_stat = file_path.stat()
+                if file_stat.st_mode & 0o077:  # Check if accessible by group/others
+                    logger.warning(f"File has loose permissions: {file_path}")
+                    os.chmod(file_path, 0o600)  # Fix permissions
+
+                with open(file_path, encoding="utf-8") as f:
+                    data = json.load(f)
+
+                # Validate JSON structure
+                if not isinstance(data, dict):
+                    logger.error(f"Invalid JSON structure in {file_path}")
+                    return {}
+
+                return data
+        except (OSError, json.JSONDecodeError, UnicodeDecodeError) as e:
+            logger.exception(f"Error loading {file_path}: {e}")
+        return {}
+
+    def _save_json(self, file_path: Path, data: dict[str, Any]) -> None:
+        """Safely save JSON to file with atomic write and secure permissions."""
+        if not validate_file_path(file_path, self.storage_path):
+            logger.error(f"Invalid file path: {file_path}")
+            raise ValueError(f"Invalid file path: {file_path}")
+
+        try:
+            # Write to temporary file first for atomic operation
+            temp_file = file_path.with_suffix(f".tmp.{secrets.token_hex(8)}")
+
+            with open(temp_file, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2, default=str, ensure_ascii=False)
+
+            # Set secure permissions before moving
+            os.chmod(temp_file, 0o600)
+
+            # Atomic rename
+            temp_file.rename(file_path)
+
+            logger.debug(f"Saved data to {file_path}")
+
+        except OSError as e:
+            logger.exception(f"Error saving {file_path}: {e}")
+            # Cleanup temp file if it exists
+            if "temp_file" in locals() and temp_file.exists():
+                temp_file.unlink(missing_ok=True)
+            raise
+
+    def _load_cache(self) -> None:
+        """Load data into memory cache with enhanced error handling."""
+        if self._cache_loaded:
+            return
+
+        # Load users
+        users_data = self._load_json(self.users_file)
+        for user_id, user_dict in users_data.items():
+            try:
+                clean_user_id = sanitize_input(str(user_id), 50)
+
+                # Convert datetime strings back to datetime objects
+                for field in [
+                    "created_at",
+                    "updated_at",
+                    "last_login",
+                    "locked_until",
+                    "last_password_change",
+                ]:
+                    if user_dict.get(field):
+                        dt_str = user_dict[field]
+                        dt = datetime.fromisoformat(dt_str.replace("Z", "+00:00"))
+                        if dt.tzinfo is None:
+                            dt = dt.replace(tzinfo=UTC)
+                        user_dict[field] = dt
+
+                # Convert permissions list back to set
+                if "permissions" in user_dict and isinstance(user_dict["permissions"], list):
+                    user_dict["permissions"] = set(user_dict["permissions"])
+
+                self._users_cache[clean_user_id] = User(**user_dict)
+
+            except Exception as e:
+                logger.exception(f"Error loading user {user_id}: {e}")
+
+        # Load API keys
+        api_keys_data = self._load_json(self.api_keys_file)
+        for key_id, key_dict in api_keys_data.items():
+            try:
+                clean_key_id = sanitize_input(str(key_id), 50)
+
+                # Convert datetime strings
+                for field in ["created_at", "last_used", "expires_at", "revoked_at"]:
+                    if key_dict.get(field):
+                        dt_str = key_dict[field]
+                        dt = datetime.fromisoformat(dt_str.replace("Z", "+00:00"))
+                        if dt.tzinfo is None:
+                            dt = dt.replace(tzinfo=UTC)
+                        key_dict[field] = dt
+
+                # Convert scopes list back to set
+                if "scopes" in key_dict and isinstance(key_dict["scopes"], list):
+                    key_dict["scopes"] = set(key_dict["scopes"])
+
+                self._api_keys_cache[clean_key_id] = APIKey(**key_dict)
+
+            except Exception as e:
+                logger.exception(f"Error loading API key {key_id}: {e}")
+
+        # Load sessions
+        sessions_data = self._load_json(self.sessions_file)
+        for session_id, session_dict in sessions_data.items():
+            try:
+                clean_session_id = sanitize_input(str(session_id), 50)
+
+                # Convert datetime strings
+                for field in ["created_at", "expires_at", "last_activity", "revoked_at"]:
+                    if session_dict.get(field):
+                        dt_str = session_dict[field]
+                        dt = datetime.fromisoformat(dt_str.replace("Z", "+00:00"))
+                        if dt.tzinfo is None:
+                            dt = dt.replace(tzinfo=UTC)
+                        session_dict[field] = dt
+
+                self._sessions_cache[clean_session_id] = Session(**session_dict)
+
+            except Exception as e:
+                logger.exception(f"Error loading session {session_id}: {e}")
+
+        self._cache_loaded = True
+        logger.info(
+            f"Loaded {len(self._users_cache)} users, {len(self._api_keys_cache)} API keys, "
+            f"and {len(self._sessions_cache)} sessions into cache"
+        )
+
+    def _save_cache(self) -> None:
+        """Save cache data to storage with timezone-aware serialization."""
+        # Save users
+        users_data: dict[str, Any] = {}
+        for user_id, user in self._users_cache.items():
+            try:
+                user_dict = user.dict()
+
+                # Convert datetime objects to ISO format strings
+                for field in [
+                    "created_at",
+                    "updated_at",
+                    "last_login",
+                    "locked_until",
+                    "last_password_change",
+                ]:
+                    if user_dict.get(field):
+                        dt = user_dict[field]
+                        if isinstance(dt, datetime):
+                            if dt.tzinfo is None:
+                                dt = dt.replace(tzinfo=UTC)
+                            user_dict[field] = dt.isoformat()
+
+                # Convert sets to lists for JSON serialization
+                if "permissions" in user_dict and isinstance(user_dict["permissions"], set):
+                    user_dict["permissions"] = sorted(user_dict["permissions"])
+
+                users_data[user_id] = user_dict
+
+            except Exception as e:
+                logger.exception(f"Error serializing user {user_id}: {e}")
+
+        self._save_json(self.users_file, users_data)
+
+        # Save API keys
+        api_keys_data: dict[str, Any] = {}
+        for key_id, api_key in self._api_keys_cache.items():
+            try:
+                key_dict = api_key.dict()
+
+                # Convert datetime objects
+                for field in ["created_at", "last_used", "expires_at", "revoked_at"]:
+                    if key_dict.get(field):
+                        dt = key_dict[field]
+                        if isinstance(dt, datetime):
+                            if dt.tzinfo is None:
+                                dt = dt.replace(tzinfo=UTC)
+                            key_dict[field] = dt.isoformat()
+
+                # Convert sets to lists
+                if "scopes" in key_dict and isinstance(key_dict["scopes"], set):
+                    key_dict["scopes"] = sorted(key_dict["scopes"])
+
+                api_keys_data[key_id] = key_dict
+
+            except Exception as e:
+                logger.exception(f"Error serializing API key {key_id}: {e}")
+
+        self._save_json(self.api_keys_file, api_keys_data)
+
+        # Save sessions
+        sessions_data: dict[str, Any] = {}
+        for session_id, session in self._sessions_cache.items():
+            try:
+                session_dict = session.dict()
+
+                # Convert datetime objects
+                for field in ["created_at", "expires_at", "last_activity", "revoked_at"]:
+                    if session_dict.get(field):
+                        dt = session_dict[field]
+                        if isinstance(dt, datetime):
+                            if dt.tzinfo is None:
+                                dt = dt.replace(tzinfo=UTC)
+                            session_dict[field] = dt.isoformat()
+
+                sessions_data[session_id] = session_dict
+
+            except Exception as e:
+                logger.exception(f"Error serializing session {session_id}: {e}")
+
+        self._save_json(self.sessions_file, sessions_data)
+
+    # User management methods
+    def create_user(self, user: User) -> bool:
+        """Create a new user with validation."""
+        self._load_cache()
+
+        # Validate user data
+        if not user.username or not user.email:
+            logger.error("Username and email are required")
+            return False
+
+        # Sanitize inputs
+        clean_username = sanitize_input(user.username, 50).lower()
+        clean_email = sanitize_input(user.email, 255).lower()
+
+        # Check if username or email already exists
+        for existing_user in self._users_cache.values():
+            if existing_user.username.lower() == clean_username:
+                logger.warning(f"Username already exists: {clean_username}")
+                return False
+            if existing_user.email.lower() == clean_email:
+                logger.warning(f"Email already exists: {clean_email}")
+                return False
+
+        # Ensure timezone-aware timestamps
+        if user.created_at.tzinfo is None:
+            user.created_at = user.created_at.replace(tzinfo=UTC)
+
+        self._users_cache[user.id] = user
+        self._save_cache()
+        logger.info(f"Created user: {clean_username}")
+        return True
+
+    def get_user_by_id(self, user_id: str) -> User | None:
+        """Get user by ID with input validation."""
+        if not user_id:
+            return None
+
+        self._load_cache()
+        clean_user_id = sanitize_input(user_id, 50)
+        return self._users_cache.get(clean_user_id)
+
+    def get_user_by_username(self, username: str) -> User | None:
+        """Get user by username with input validation."""
+        if not username:
+            return None
+
+        self._load_cache()
+        clean_username = sanitize_input(username, 50).lower()
+
+        for user in self._users_cache.values():
+            if user.username.lower() == clean_username:
+                return user
+        return None
+
+    def update_user(self, user: User) -> bool:
+        """Update an existing user with validation."""
+        if not user or not user.id:
+            return False
+
+        self._load_cache()
+
+        if user.id not in self._users_cache:
+            return False
+
+        # Ensure timezone-aware timestamps
+        user.updated_at = datetime.now(UTC)
+
+        self._users_cache[user.id] = user
+        self._save_cache()
+        logger.info(f"Updated user: {user.username}")
+        return True
+
+    def delete_user(self, user_id: str) -> bool:
+        """Delete a user and their related data."""
+        if not user_id:
+            return False
+
+        self._load_cache()
+        clean_user_id = sanitize_input(user_id, 50)
+
+        if clean_user_id not in self._users_cache:
+            return False
+
+        # Delete user's API keys
+        keys_to_delete = [
+            key_id
+            for key_id, api_key in self._api_keys_cache.items()
+            if api_key.user_id == clean_user_id
+        ]
+        for key_id in keys_to_delete:
+            del self._api_keys_cache[key_id]
+
+        # Delete user's sessions
+        sessions_to_delete = [
+            session_id
+            for session_id, session in self._sessions_cache.items()
+            if session.user_id == clean_user_id
+        ]
+        for session_id in sessions_to_delete:
+            del self._sessions_cache[session_id]
+
+        # Delete user
+        username = self._users_cache[clean_user_id].username
+        del self._users_cache[clean_user_id]
+        self._save_cache()
+
+        logger.info(
+            f"Deleted user: {username}, {len(keys_to_delete)} API keys, {len(sessions_to_delete)} sessions"
+        )
+        return True
+
+    def list_users(self) -> list[User]:
+        """List all users."""
+        self._load_cache()
+        return list(self._users_cache.values())
+
+    # API Key management methods
+    def create_api_key(self, api_key: APIKey) -> bool:
+        """Create a new API key."""
+        if not api_key or not api_key.name or not api_key.user_id:
+            logger.error("API key name and user_id are required")
+            return False
+
+        self._load_cache()
+
+        # Ensure timezone-aware created_at
+        if api_key.created_at.tzinfo is None:
+            api_key.created_at = api_key.created_at.replace(tzinfo=UTC)
+
+        self._api_keys_cache[api_key.id] = api_key
+        self._save_cache()
+        logger.info(f"Created API key: {api_key.name} for user {api_key.user_id}")
+        return True
+
+    def get_api_key_by_id(self, key_id: str) -> APIKey | None:
+        """Get API key by ID."""
+        if not key_id:
+            return None
+
+        self._load_cache()
+        clean_key_id = sanitize_input(key_id, 50)
+        return self._api_keys_cache.get(clean_key_id)
+
+    def get_api_key_by_prefix(self, prefix: str) -> APIKey | None:
+        """Get API key by prefix."""
+        if not prefix or len(prefix) < 8:
+            return None
+
+        self._load_cache()
+        clean_prefix = sanitize_input(prefix, 20)
+
+        for api_key in self._api_keys_cache.values():
+            if api_key.key_prefix == clean_prefix:
+                return api_key
+        return None
+
+    def verify_api_key(self, raw_key: str) -> APIKey | None:
+        """Verify an API key and return the APIKey object if valid."""
+        if not raw_key or len(raw_key) < 8:
+            logger.warning("Invalid API key format")
+            return None
+
+        clean_key = sanitize_input(raw_key, 100)
+        if len(clean_key) != len(raw_key):
+            logger.warning("API key contains invalid characters")
+            return None
+
+        prefix = clean_key[:8]
+        api_key = self.get_api_key_by_prefix(prefix)
+
+        if not api_key:
+            logger.warning(f"API key not found for prefix: {prefix}")
+            return None
+
+        if not api_key.verify_key(clean_key):
+            logger.warning(f"API key verification failed: {prefix}")
+            return None
+
+        # Update last used timestamp and usage count
+        api_key.last_used = datetime.now(UTC)
+        api_key.usage_count += 1
+        self.update_api_key(api_key)
+
+        logger.info(f"API key verified: {prefix}")
+        return api_key
+
+    def update_api_key(self, api_key: APIKey) -> bool:
+        """Update an existing API key."""
+        if not api_key or not api_key.id:
+            return False
+
+        self._load_cache()
+
+        if api_key.id not in self._api_keys_cache:
+            return False
+
+        self._api_keys_cache[api_key.id] = api_key
+        self._save_cache()
+        return True
+
+    def delete_api_key(self, key_id: str) -> bool:
+        """Delete an API key."""
+        if not key_id:
+            return False
+
+        self._load_cache()
+        clean_key_id = sanitize_input(key_id, 50)
+
+        if clean_key_id not in self._api_keys_cache:
+            return False
+
+        key_name = self._api_keys_cache[clean_key_id].name
+        del self._api_keys_cache[clean_key_id]
+        self._save_cache()
+        logger.info(f"Deleted API key: {key_name}")
+        return True
+
+    def list_api_keys(self, user_id: str | None = None) -> list[APIKey]:
+        """List API keys, optionally filtered by user."""
+        self._load_cache()
+        keys = list(self._api_keys_cache.values())
+
+        if user_id:
+            clean_user_id = sanitize_input(user_id, 50)
+            keys = [key for key in keys if key.user_id == clean_user_id]
+
+        return keys
+
+    # Session management methods
+    def create_session(self, session: Session) -> bool:
+        """Create a new session."""
+        if not session or not session.user_id:
+            return False
+
+        self._load_cache()
+        self._sessions_cache[session.id] = session
+        self._save_cache()
+        return True
+
+    def get_session_by_id(self, session_id: str) -> Session | None:
+        """Get session by ID."""
+        if not session_id:
+            return None
+
+        self._load_cache()
+        clean_session_id = sanitize_input(session_id, 50)
+        return self._sessions_cache.get(clean_session_id)
+
+    def update_session(self, session: Session) -> bool:
+        """Update an existing session."""
+        if not session or not session.id:
+            return False
+
+        self._load_cache()
+
+        if session.id not in self._sessions_cache:
+            return False
+
+        self._sessions_cache[session.id] = session
+        self._save_cache()
+        return True
+
+    def delete_session(self, session_id: str) -> bool:
+        """Delete a session."""
+        if not session_id:
+            return False
+
+        self._load_cache()
+        clean_session_id = sanitize_input(session_id, 50)
+
+        if clean_session_id not in self._sessions_cache:
+            return False
+
+        del self._sessions_cache[clean_session_id]
+        self._save_cache()
+        return True
+
+    def cleanup_expired_sessions(self) -> int:
+        """Remove expired sessions and return count of removed sessions."""
+        self._load_cache()
+
+        expired_sessions = [
+            session_id
+            for session_id, session in self._sessions_cache.items()
+            if not session.is_valid()
+        ]
+
+        for session_id in expired_sessions:
+            del self._sessions_cache[session_id]
+
+        if expired_sessions:
+            self._save_cache()
+            logger.info(f"Cleaned up {len(expired_sessions)} expired sessions")
+
+        return len(expired_sessions)
+
+    # Authentication event logging
+    def log_auth_event(self, event: AuthEvent) -> bool:
+        """Log an authentication event."""
+        try:
+            events_data = self._load_json(self.events_file)
+
+            # Keep only recent events (last 30 days) to prevent file growth
+            cutoff_date = datetime.now(UTC) - timedelta(days=30)
+            recent_events = {
+                event_id: event_data
+                for event_id, event_data in events_data.items()
+                if datetime.fromisoformat(event_data.get("created_at", "1970-01-01")).replace(
+                    tzinfo=UTC
+                )
+                > cutoff_date
+            }
+
+            # Add new event
+            event_dict = event.dict()
+            event_dict["created_at"] = event.created_at.isoformat()
+            recent_events[event.id] = event_dict
+
+            self._save_json(self.events_file, recent_events)
+            return True
+
+        except Exception as e:
+            logger.exception(f"Failed to log auth event: {e}")
+            return False
+
+    def get_auth_events(self, user_id: str | None = None, limit: int = 100) -> list[AuthEvent]:
+        """Get authentication events, optionally filtered by user."""
+        try:
+            events_data = self._load_json(self.events_file)
+            events = []
+
+            for event_dict in events_data.values():
+                if user_id and event_dict.get("user_id") != user_id:
+                    continue
+
+                # Convert datetime string back
+                if event_dict.get("created_at"):
+                    event_dict["created_at"] = datetime.fromisoformat(event_dict["created_at"])
+
+                events.append(AuthEvent(**event_dict))
+
+            # Sort by creation time (newest first) and limit
+            events.sort(key=lambda x: x.created_at, reverse=True)
+            return events[:limit]
+
+        except Exception as e:
+            logger.exception(f"Failed to get auth events: {e}")
+            return []
+
+    def get_storage_stats(self) -> dict[str, Any]:
+        """Get authentication storage statistics."""
+        self._load_cache()
+
+        users = list(self._users_cache.values())
+        api_keys = list(self._api_keys_cache.values())
+        sessions = list(self._sessions_cache.values())
+
+        return {
+            "total_users": len(users),
+            "active_users": len([u for u in users if u.is_active]),
+            "total_api_keys": len(api_keys),
+            "active_api_keys": len([k for k in api_keys if k.is_active and not k.is_expired()]),
+            "total_sessions": len(sessions),
+            "active_sessions": len([s for s in sessions if s.is_valid()]),
+            "storage_path": str(self.storage_path),
+            "cache_loaded": self._cache_loaded,
+            "secure_storage": True,
+        }
+
+
+# Global storage instance
+auth_storage = AuthStorage()
+
+
+def initialize_default_users() -> None:
+    """Initialize default users if no users exist."""
+    if not auth_storage.list_users():
+        from .auth_jwt import create_default_admin_user
+
+        admin_user = create_default_admin_user()
+        auth_storage.create_user(admin_user)
+        logger.info("Initialized default admin user")

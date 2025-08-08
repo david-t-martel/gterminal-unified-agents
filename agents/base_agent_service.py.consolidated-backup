@@ -1,0 +1,557 @@
+"""Base Agent Service - Enhanced service layer for agent implementations.
+
+Provides job management, async operations, and streaming capabilities.
+
+Modernization updates:
+- Updated to use Python 3.10+ type annotations (dict/list/| instead of typing.Dict/List/Optional)
+- Enhanced type hints throughout
+- Timezone-aware datetime handling
+- Improved error handling and validation
+"""
+
+import asyncio
+import json
+import uuid
+from abc import abstractmethod
+from collections.abc import AsyncGenerator, Callable
+from datetime import UTC, datetime
+from enum import Enum
+from typing import Any
+
+from app.automation.base_automation_agent import BaseAutomationAgent
+
+
+class JobStatus(Enum):
+    """Job execution status."""
+
+    PENDING = "pending"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+class Job:
+    """Job tracking and management with enhanced validation."""
+
+    def __init__(self, job_id: str, job_type: str, parameters: dict[str, Any]):
+        # Validate inputs
+        if not job_id or not isinstance(job_id, str):
+            raise ValueError("Job ID must be a non-empty string")
+        if not job_type or not isinstance(job_type, str):
+            raise ValueError("Job type must be a non-empty string")
+        if not isinstance(parameters, dict):
+            raise ValueError("Parameters must be a dictionary")
+
+        self.job_id = job_id.strip()
+        self.job_type = job_type.strip()
+        self.parameters = parameters.copy()  # Defensive copy
+        self.status = JobStatus.PENDING
+        self.created_at = datetime.now(UTC)
+        self.started_at: datetime | None = None
+        self.completed_at: datetime | None = None
+        self.progress = 0.0
+        self.result: dict[str, Any] | None = None
+        self.error: str | None = None
+        self.logs: list[str] = []
+
+    def start(self):
+        """Mark job as started with validation."""
+        if self.status != JobStatus.PENDING:
+            raise ValueError(f"Cannot start job in {self.status.value} status")
+
+        self.status = JobStatus.RUNNING
+        self.started_at = datetime.now(UTC)
+
+    def complete(self, result: dict[str, Any]):
+        """Mark job as completed with result validation."""
+        if self.status != JobStatus.RUNNING:
+            raise ValueError(f"Cannot complete job in {self.status.value} status")
+        if not isinstance(result, dict):
+            raise ValueError("Result must be a dictionary")
+
+        self.status = JobStatus.COMPLETED
+        self.completed_at = datetime.now(UTC)
+        self.progress = 100.0
+        self.result = result.copy()  # Defensive copy
+
+    def fail(self, error: str):
+        """Mark job as failed with error validation."""
+        if not error or not isinstance(error, str):
+            raise ValueError("Error message must be a non-empty string")
+
+        self.status = JobStatus.FAILED
+        self.completed_at = datetime.now(UTC)
+        self.error = error.strip()
+
+    def cancel(self):
+        """Cancel the job."""
+        if self.status in [JobStatus.COMPLETED, JobStatus.FAILED]:
+            raise ValueError(f"Cannot cancel job in {self.status.value} status")
+
+        self.status = JobStatus.CANCELLED
+        self.completed_at = datetime.now(UTC)
+
+    def add_log(self, message: str):
+        """Add log message with validation."""
+        if not message or not isinstance(message, str):
+            return  # Silently ignore invalid log messages
+
+        timestamp = datetime.now(UTC).isoformat()
+        self.logs.append(f"[{timestamp}] {message.strip()}")
+
+        # Limit log size to prevent memory issues
+        if len(self.logs) > 1000:
+            self.logs = self.logs[-500:]  # Keep last 500 entries
+
+    def update_progress(self, progress: float, message: str | None = None):
+        """Update job progress with validation."""
+        if not isinstance(progress, (int, float)):
+            raise ValueError("Progress must be a number")
+
+        self.progress = max(0.0, min(100.0, float(progress)))
+
+        if message:
+            self.add_log(message)
+
+    def get_duration(self) -> float | None:
+        """Get job duration in seconds."""
+        if not self.started_at:
+            return None
+
+        end_time = self.completed_at or datetime.now(UTC)
+        return (end_time - self.started_at).total_seconds()
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert job to dictionary with enhanced data."""
+        return {
+            "job_id": self.job_id,
+            "job_type": self.job_type,
+            "parameters": self.parameters,
+            "status": self.status.value,
+            "created_at": self.created_at.isoformat(),
+            "started_at": self.started_at.isoformat() if self.started_at else None,
+            "completed_at": self.completed_at.isoformat() if self.completed_at else None,
+            "progress": self.progress,
+            "result": self.result,
+            "error": self.error,
+            "logs": self.logs[-10:],  # Last 10 log entries
+            "duration_seconds": self.get_duration(),
+        }
+
+
+class BaseAgentService(BaseAutomationAgent):
+    """Enhanced base class for agent services with job management and streaming.
+
+    Provides:
+    - Async job execution with progress tracking
+    - Streaming response support
+    - Enhanced error handling and logging
+    - Integration with existing auth system
+    - Modern Python type annotations
+    """
+
+    def __init__(self, agent_name: str, description: str = ""):
+        if not agent_name or not isinstance(agent_name, str):
+            raise ValueError("Agent name must be a non-empty string")
+
+        super().__init__(agent_name.strip(), description.strip())
+
+        # Store agent name for direct access
+        self.agent_name = agent_name.strip()
+
+        # Job management
+        self.jobs: dict[str, Job] = {}
+        self.max_concurrent_jobs = 5
+        self.running_jobs = 0
+        self.max_job_history = 1000
+
+        # Streaming support
+        self.active_streams: dict[str, bool] = {}
+
+    def create_job(self, job_type: str, parameters: dict[str, Any]) -> str:
+        """Create a new job and return job ID.
+
+        Args:
+            job_type: Type of job to create
+            parameters: Job parameters
+
+        Returns:
+            Job ID string
+
+        Raises:
+            ValueError: If job_type or parameters are invalid
+        """
+        if not job_type or not isinstance(job_type, str):
+            raise ValueError("Job type must be a non-empty string")
+        if not isinstance(parameters, dict):
+            raise ValueError("Parameters must be a dictionary")
+
+        job_id = str(uuid.uuid4())
+        job = Job(job_id, job_type, parameters)
+
+        # Cleanup old jobs if needed
+        if len(self.jobs) >= self.max_job_history:
+            self._cleanup_old_jobs(keep_recent=self.max_job_history // 2)
+
+        self.jobs[job_id] = job
+
+        self.logger.info(f"Created job {job_id} of type {job_type}")
+        return job_id
+
+    def get_job(self, job_id: str) -> Job | None:
+        """Get job by ID with validation."""
+        if not job_id or not isinstance(job_id, str):
+            return None
+        return self.jobs.get(job_id.strip())
+
+    def get_job_status(self, job_id: str) -> dict[str, Any]:
+        """Get job status and details."""
+        job = self.get_job(job_id)
+        if not job:
+            return self.create_error_response(f"Job {job_id} not found")
+
+        return self.create_success_response({"job": job.to_dict()}, "Job status retrieved")
+
+    def cancel_job(self, job_id: str) -> dict[str, Any]:
+        """Cancel a running job."""
+        job = self.get_job(job_id)
+        if not job:
+            return self.create_error_response(f"Job {job_id} not found")
+
+        try:
+            job.cancel()
+            self.logger.info(f"Cancelled job {job_id}")
+            return self.create_success_response({"job": job.to_dict()}, "Job cancelled")
+        except ValueError as e:
+            return self.create_error_response(str(e))
+
+    async def execute_job_async(self, job_id: str) -> dict[str, Any]:
+        """Execute job asynchronously with progress tracking.
+
+        Args:
+            job_id: ID of job to execute
+
+        Returns:
+            Job execution result
+        """
+        job = self.get_job(job_id)
+        if not job:
+            return self.create_error_response(f"Job {job_id} not found")
+
+        if self.running_jobs >= self.max_concurrent_jobs:
+            return self.create_error_response("Too many concurrent jobs")
+
+        try:
+            self.running_jobs += 1
+            job.start()
+            job.add_log(f"Starting {job.job_type} execution")
+
+            # Validate job parameters before execution
+            if not self.validate_job_parameters(job.job_type, job.parameters):
+                error_msg = "Job parameter validation failed"
+                job.fail(error_msg)
+                return self.create_error_response(error_msg, {"job_id": job_id})
+
+            # Execute the specific job type
+            result = await self._execute_job_implementation(job)
+
+            job.complete(result)
+            job.add_log("Job completed successfully")
+
+            return self.create_success_response(
+                {"job": job.to_dict()}, "Job completed successfully"
+            )
+
+        except asyncio.CancelledError:
+            job.cancel()
+            job.add_log("Job was cancelled")
+            self.logger.info(f"Job {job_id} was cancelled")
+            return self.create_error_response("Job was cancelled", {"job_id": job_id})
+
+        except Exception as e:
+            job.fail(str(e))
+            job.add_log(f"Job failed: {e!s}")
+            self.logger.error(f"Job {job_id} failed: {e}")
+
+            return self.create_error_response(f"Job execution failed: {e!s}", {"job_id": job_id})
+
+        finally:
+            self.running_jobs = max(0, self.running_jobs - 1)
+
+    async def stream_job_progress(self, job_id: str) -> AsyncGenerator[str, None]:
+        """Stream job progress updates via Server-Sent Events.
+
+        Args:
+            job_id: ID of job to stream
+
+        Yields:
+            JSON-encoded progress updates
+        """
+        job = self.get_job(job_id)
+        if not job:
+            yield f"data: {json.dumps(self.create_error_response('Job not found'))}\n\n"
+            return
+
+        self.active_streams[job_id] = True
+
+        try:
+            # Stream initial status
+            yield f"data: {json.dumps(job.to_dict())}\n\n"
+
+            # Stream updates while job is running
+            last_update = job.to_dict()
+
+            while job.status in [JobStatus.PENDING, JobStatus.RUNNING] and self.active_streams.get(
+                job_id, False
+            ):
+                await asyncio.sleep(1)  # Poll every second
+
+                current_status = job.to_dict()
+
+                # Only send update if something changed
+                if current_status != last_update:
+                    yield f"data: {json.dumps(current_status)}\n\n"
+                    last_update = current_status
+
+            # Final status
+            if self.active_streams.get(job_id, False):
+                yield f"data: {json.dumps(job.to_dict())}\n\n"
+
+        except Exception as e:
+            error_msg = self.create_error_response(f"Streaming error: {e!s}")
+            yield f"data: {json.dumps(error_msg)}\n\n"
+
+        finally:
+            self.active_streams.pop(job_id, None)
+
+    def stop_stream(self, job_id: str):
+        """Stop streaming for a job."""
+        if job_id in self.active_streams:
+            self.active_streams[job_id] = False
+
+    async def generate_with_progress(
+        self,
+        prompt: str,
+        task_type: str = "analysis",
+        job: Job | None = None,
+        progress_callback: Callable[[float, str], None] | None = None,
+    ) -> str | dict[str, Any] | None:
+        """Generate content with Gemini while tracking progress.
+
+        Args:
+            prompt: Prompt for generation
+            task_type: Type of task for model selection
+            job: Optional job for progress tracking
+            progress_callback: Optional callback for progress updates
+
+        Returns:
+            Generated content or None if failed
+        """
+        if not prompt or not isinstance(prompt, str):
+            self.logger.error("Invalid prompt provided")
+            return None
+
+        try:
+            if job:
+                job.update_progress(10.0, "Initializing model...")
+            if progress_callback:
+                progress_callback(10.0, "Initializing model...")
+
+            model = self.get_model(task_type)
+
+            if job:
+                job.update_progress(30.0, "Sending request to Gemini...")
+            if progress_callback:
+                progress_callback(30.0, "Sending request to Gemini...")
+
+            # Generate content with streaming support
+            response = model.generate_content(prompt.strip(), stream=False)
+
+            if job:
+                job.update_progress(80.0, "Processing response...")
+            if progress_callback:
+                progress_callback(80.0, "Processing response...")
+
+            content = response.text
+
+            if job:
+                job.update_progress(100.0, "Generation completed")
+            if progress_callback:
+                progress_callback(100.0, "Generation completed")
+
+            return content
+
+        except Exception as e:
+            error_msg = f"Gemini generation failed: {e}"
+            if job:
+                job.add_log(error_msg)
+            self.logger.error(error_msg)
+            return None
+
+    def validate_job_parameters(self, job_type: str, parameters: dict[str, Any]) -> bool:
+        """Validate job parameters for specific job type.
+
+        Args:
+            job_type: Type of job
+            parameters: Parameters to validate
+
+        Returns:
+            True if valid, False otherwise
+
+        # TODO: Add comprehensive parameter validation schema using Pydantic models
+        # TODO: Implement job-type-specific validation rules
+        # TODO: Add parameter sanitization and security checks
+        """
+        if not isinstance(parameters, dict):
+            self.logger.error("Parameters must be a dictionary")
+            return False
+
+        # Base validation - override in subclasses
+        required_params = self.get_required_parameters(job_type)
+
+        for param in required_params:
+            if param not in parameters:
+                self.logger.error(f"Missing required parameter: {param}")
+                return False
+            if parameters[param] is None:
+                self.logger.error(f"Parameter cannot be None: {param}")
+                return False
+
+        return True
+
+    def get_required_parameters(self, job_type: str) -> list[str]:
+        """Get required parameters for job type.
+        Override in subclasses.
+
+        Args:
+            job_type: Type of job
+
+        Returns:
+            List of required parameter names
+
+        # TODO: Replace with job registry system for better maintainability
+        # TODO: Add parameter type definitions and descriptions
+        """
+        return []
+
+    @abstractmethod
+    async def _execute_job_implementation(self, job: Job) -> dict[str, Any]:
+        """Execute the specific job implementation.
+        Must be implemented by subclasses.
+
+        Args:
+            job: Job to execute
+
+        Returns:
+            Job execution result
+        """
+        pass
+
+    def _cleanup_old_jobs(self, keep_recent: int = 500):
+        """Clean up old completed jobs.
+
+        Args:
+            keep_recent: Number of recent jobs to keep
+        """
+        if len(self.jobs) <= keep_recent:
+            return
+
+        # Sort jobs by creation time and keep the most recent
+        sorted_jobs = sorted(self.jobs.items(), key=lambda x: x[1].created_at, reverse=True)
+
+        # Keep only the most recent jobs
+        jobs_to_keep = dict(sorted_jobs[:keep_recent])
+
+        removed_count = len(self.jobs) - len(jobs_to_keep)
+        self.jobs = jobs_to_keep
+
+        if removed_count > 0:
+            self.logger.info(f"Cleaned up {removed_count} old jobs")
+
+    def cleanup_old_jobs(self, max_age_hours: int = 24):
+        """Clean up old completed jobs by age.
+
+        Args:
+            max_age_hours: Maximum age in hours before cleanup
+
+        # TODO: Add configuration for cleanup policies (age, count, size limits)
+        # TODO: Implement job archival before deletion for audit purposes
+        """
+        from datetime import timedelta
+
+        cutoff_time = datetime.now(UTC) - timedelta(hours=max_age_hours)
+
+        jobs_to_remove = []
+        for job_id, job in self.jobs.items():
+            if (
+                job.status in [JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.CANCELLED]
+                and job.completed_at
+                and job.completed_at < cutoff_time
+            ):
+                jobs_to_remove.append(job_id)
+
+        for job_id in jobs_to_remove:
+            del self.jobs[job_id]
+
+        if jobs_to_remove:
+            self.logger.info(f"Cleaned up {len(jobs_to_remove)} old jobs")
+
+    def get_agent_stats(self) -> dict[str, Any]:
+        """Get agent statistics with enhanced metrics."""
+        total_jobs = len(self.jobs)
+        completed_jobs = sum(1 for job in self.jobs.values() if job.status == JobStatus.COMPLETED)
+        failed_jobs = sum(1 for job in self.jobs.values() if job.status == JobStatus.FAILED)
+        running_jobs = sum(1 for job in self.jobs.values() if job.status == JobStatus.RUNNING)
+        cancelled_jobs = sum(1 for job in self.jobs.values() if job.status == JobStatus.CANCELLED)
+
+        # Calculate average duration for completed jobs
+        completed_durations = [
+            job.get_duration()
+            for job in self.jobs.values()
+            if job.status == JobStatus.COMPLETED and job.get_duration() is not None
+        ]
+        avg_duration = (
+            sum(completed_durations) / len(completed_durations) if completed_durations else 0
+        )
+
+        return {
+            "agent_name": self.agent_name,
+            "total_jobs": total_jobs,
+            "completed_jobs": completed_jobs,
+            "failed_jobs": failed_jobs,
+            "running_jobs": running_jobs,
+            "cancelled_jobs": cancelled_jobs,
+            "success_rate": completed_jobs / max(total_jobs, 1) * 100,
+            "max_concurrent_jobs": self.max_concurrent_jobs,
+            "active_streams": len(self.active_streams),
+            "average_duration_seconds": round(avg_duration, 2),
+            "current_running_jobs": self.running_jobs,
+        }
+
+    def list_jobs(
+        self, status_filter: JobStatus | None = None, limit: int = 100, offset: int = 0
+    ) -> list[dict[str, Any]]:
+        """List jobs with optional filtering and pagination.
+
+        Args:
+            status_filter: Optional status to filter by
+            limit: Maximum number of jobs to return
+            offset: Number of jobs to skip
+
+        Returns:
+            List of job dictionaries
+        """
+        jobs = list(self.jobs.values())
+
+        # Filter by status if specified
+        if status_filter:
+            jobs = [job for job in jobs if job.status == status_filter]
+
+        # Sort by creation time (newest first)
+        jobs.sort(key=lambda x: x.created_at, reverse=True)
+
+        # Apply pagination
+        jobs = jobs[offset : offset + limit]
+
+        return [job.to_dict() for job in jobs]

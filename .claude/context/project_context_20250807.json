@@ -38,12 +38,7 @@
     "technology_stack": {
       "primary_language": "Python 3.12+",
       "performance_language": "Rust",
-      "key_libraries": [
-        "FastMCP",
-        "prompt_toolkit",
-        "aiohttp",
-        "PyO3"
-      ],
+      "key_libraries": ["FastMCP", "prompt_toolkit", "aiohttp", "PyO3"],
       "infrastructure": {
         "cache": "Redis",
         "authentication": "Service Accounts"

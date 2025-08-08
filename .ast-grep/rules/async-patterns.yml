@@ -1,0 +1,98 @@
+id: async-patterns
+message: "Async/await pattern validation"
+severity: warning
+language: python
+rules:
+  # Async Function Patterns
+  - id: async-without-await
+    message: "# FIXME: Async function doesn't use await - consider making synchronous"
+    severity: warning
+    language: python
+    rule:
+      pattern: |
+        async def $FUNC($$$PARAMS):
+            $$$BODY
+      constraints:
+        BODY:
+          not:
+            has:
+              any:
+                - pattern: "await"
+                - pattern: "async"
+    note: "If function doesn't use await, it should be synchronous"
+
+  - id: blocking-calls-in-async
+    message: "# FIXME: Blocking I/O call in async function - use async equivalent"
+    severity: error
+    language: python
+    rule:
+      pattern: |
+        async def $FUNC($$$):
+            $$$BODY
+            $BLOCKING_CALL($$$)
+            $$$REST
+      constraints:
+        BLOCKING_CALL:
+          regex: "(requests\\.(get|post|put|delete)|open|time\\.sleep|subprocess\\.run)"
+    note: "Use aiohttp, aiofiles, asyncio.sleep, or asyncio.subprocess"
+
+  - id: sync-context-manager-in-async
+    message: "# FIXME: Use async context manager in async function"
+    severity: warning
+    language: python
+    rule:
+      pattern: |
+        async def $FUNC($$$):
+            with $CONTEXT as $VAR:
+                $$$BODY
+      constraints:
+        CONTEXT:
+          regex: "(open|aiohttp\\.ClientSession)"
+    fix: |
+      async def $FUNC($$$):
+          async with $CONTEXT as $VAR:
+              $$$BODY
+    note: "Use 'async with' for async context managers"
+
+  # Await Patterns
+  - id: missing-await
+    message: "# FIXME: Missing await for async function call"
+    severity: error
+    language: python
+    rule:
+      pattern: "$ASYNC_FUNC($$$ARGS)"
+      inside:
+        pattern: |
+          async def $FUNC($$$):
+              $$$
+      constraints:
+        ASYNC_FUNC:
+          regex: "(aiohttp\\.|asyncio\\.|async_)"
+    fix: "await $ASYNC_FUNC($$$ARGS)"
+    note: "Async function calls must be awaited"
+
+  - id: unnecessary-await
+    message: "# FIXME: Unnecessary await on non-async function"
+    severity: error
+    language: python
+    rule:
+      pattern: "await $SYNC_FUNC($$$ARGS)"
+      constraints:
+        SYNC_FUNC:
+          regex: "(len|str|int|print|range)"
+    fix: "$SYNC_FUNC($$$ARGS)"
+    note: "Don't await synchronous functions"
+
+  # Asyncio Patterns
+  - id: asyncio-run-in-async
+    message: "# FIXME: Don't use asyncio.run() inside async function"
+    severity: error
+    language: python
+    rule:
+      pattern: "asyncio.run($CORO)"
+      inside:
+        pattern: |
+          async def $FUNC($$$):
+              $$$
+    fix: "await $CORO"
+    note: "Use await directly inside async functions"

@@ -1,0 +1,522 @@
+name: DevOps Integration Pipeline
+# Comprehensive CI/CD for GTerminal Rust-Python integrated toolchain
+
+on:
+  push:
+    branches: [main, develop, feature/*, release/*]
+  pull_request:
+    branches: [main, develop]
+  schedule:
+    # Run nightly builds
+    - cron: "0 2 * * *"
+  workflow_dispatch:
+    inputs:
+      deployment_target:
+        description: "Deployment target"
+        required: true
+        default: "staging"
+        type: choice
+        options:
+          - staging
+          - production
+      skip_tests:
+        description: "Skip test execution"
+        required: false
+        default: false
+        type: boolean
+
+env:
+  # Container Registry
+  REGISTRY: ghcr.io
+  IMAGE_NAME: gterminal
+
+  # Rust Configuration
+  RUST_VERSION: 1.75
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+  # Python Configuration
+  PYTHON_VERSION: 3.11
+  UV_CACHE_DIR: ~/.cache/uv
+
+  # Security
+  SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+  CLAUDE_API_KEY: ${{ secrets.CLAUDE_API_KEY }}
+
+jobs:
+  # ======================
+  # Security and Analysis
+  # ======================
+
+  security-scan:
+    name: Security Analysis
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: "fs"
+          scan-ref: "."
+          format: "sarif"
+          output: "trivy-results.sarif"
+
+      - name: Upload Trivy scan results
+        uses: github/codeql-action/upload-sarif@v2
+        if: always()
+        with:
+          sarif_file: "trivy-results.sarif"
+
+      - name: Rust security audit
+        run: |
+          cd rust-filewatcher
+          cargo audit --deny warnings
+
+      - name: Python security scan with bandit
+        run: |
+          pip install bandit[toml]
+          bandit -r gterminal/ -f json -o bandit-report.json || true
+
+      - name: Upload security artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-reports
+          path: |
+            trivy-results.sarif
+            bandit-report.json
+
+  # ======================
+  # Rust Build and Test
+  # ======================
+
+  rust-build:
+    name: Rust Filewatcher Build
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        rust: [stable, beta]
+        exclude:
+          - os: windows-latest
+            rust: beta
+          - os: macos-latest
+            rust: beta
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.rust }}
+          components: rustfmt, clippy
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust-filewatcher
+
+      - name: Rust format check
+        run: |
+          cd rust-filewatcher
+          cargo fmt -- --check
+
+      - name: Rust lint with Clippy
+        run: |
+          cd rust-filewatcher
+          cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Run Rust tests
+        run: |
+          cd rust-filewatcher
+          cargo test --verbose --all-features
+
+      - name: Build optimized release
+        run: |
+          cd rust-filewatcher
+          cargo build --release --all-features
+
+      - name: Run benchmarks
+        if: matrix.os == 'ubuntu-latest' && matrix.rust == 'stable'
+        run: |
+          cd rust-filewatcher
+          cargo bench --features benchmarks
+
+      - name: Upload Rust artifacts
+        if: matrix.os == 'ubuntu-latest' && matrix.rust == 'stable'
+        uses: actions/upload-artifact@v4
+        with:
+          name: rust-binaries
+          path: rust-filewatcher/target/release/rust-filewatcher*
+
+  # ======================
+  # Python Build and Test
+  # ======================
+
+  python-build:
+    name: Python Application Build
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python-version: ["3.11", "3.12"]
+        exclude:
+          - os: windows-latest
+            python-version: "3.12"
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install uv
+        run: pip install uv
+
+      - name: Cache Python dependencies
+        uses: actions/cache@v3
+        with:
+          path: ${{ env.UV_CACHE_DIR }}
+          key: ${{ runner.os }}-uv-${{ hashFiles('**/uv.lock') }}
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Code formatting with ruff
+        run: uv run ruff format --check .
+
+      - name: Linting with ruff
+        run: uv run ruff check .
+
+      - name: Type checking with mypy
+        run: uv run mypy gterminal/
+
+      - name: Run Python tests
+        if: ${{ !inputs.skip_tests }}
+        run: |
+          uv run pytest tests/ \
+            --cov=gterminal \
+            --cov-report=xml \
+            --cov-report=html \
+            --junit-xml=pytest-results.xml \
+            -v
+
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: python-test-results-${{ matrix.os }}-${{ matrix.python-version }}
+          path: |
+            pytest-results.xml
+            htmlcov/
+            coverage.xml
+
+  # ======================
+  # Integration Testing
+  # ======================
+
+  integration-tests:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    needs: [rust-build, python-build]
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: gterminal_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v4
+        with:
+          python-version: 3.11
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install uv
+        run: pip install uv
+
+      - name: Download Rust binaries
+        uses: actions/download-artifact@v4
+        with:
+          name: rust-binaries
+          path: ./bins/
+
+      - name: Make binaries executable
+        run: chmod +x ./bins/rust-filewatcher
+
+      - name: Install Python dependencies
+        run: uv sync --frozen
+
+      - name: Start Rust filewatcher
+        run: |
+          ./bins/rust-filewatcher --config tests/fixtures/filewatcher-test.toml &
+          echo $! > filewatcher.pid
+          sleep 5  # Wait for startup
+
+      - name: Run integration tests
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/gterminal_test
+          REDIS_URL: redis://localhost:6379
+          FILEWATCHER_WS_URL: ws://localhost:8765
+          LSP_SERVER_URL: http://localhost:8767
+        run: |
+          uv run pytest tests/integration/ \
+            --integration \
+            --timeout=300 \
+            -v
+
+      - name: Test service orchestration
+        run: |
+          uv run python orchestration/service-orchestrator.py --action status
+
+      - name: Run end-to-end tests
+        run: |
+          uv run pytest tests/e2e/ \
+            --e2e \
+            --timeout=600 \
+            -v
+
+      - name: Cleanup
+        if: always()
+        run: |
+          if [ -f filewatcher.pid ]; then
+            kill $(cat filewatcher.pid) || true
+          fi
+
+  # ======================
+  # Container Build
+  # ======================
+
+  container-build:
+    name: Container Build and Push
+    runs-on: ubuntu-latest
+    needs: [security-scan, integration-tests]
+    if: github.event_name != 'pull_request'
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ github.repository }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=sha,prefix={{branch}}-
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push production image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: Dockerfile.production
+          target: production
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          platforms: linux/amd64,linux/arm64
+
+      - name: Build and push dashboard image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: Dockerfile.dashboard
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ github.repository }}/dashboard:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build and push Ruff LSP image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: Dockerfile.ruff-lsp
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ github.repository }}/ruff-lsp:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build and push Rust filewatcher image
+        uses: docker/build-push-action@v5
+        with:
+          context: rust-filewatcher
+          file: rust-filewatcher/Dockerfile
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ github.repository }}/rust-filewatcher:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ======================
+  # Performance Testing
+  # ======================
+
+  performance-tests:
+    name: Performance Benchmarks
+    runs-on: ubuntu-latest
+    needs: [container-build]
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup performance testing
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y apache2-utils wrk
+
+      - name: Start services with Docker Compose
+        run: |
+          docker-compose -f docker-compose.production.yml up -d
+          sleep 60  # Wait for all services to start
+
+      - name: Run load tests
+        run: |
+          # Test filewatcher WebSocket performance
+          wrk -t4 -c100 -d30s --timeout 30s http://localhost:8766/health
+
+          # Test LSP server performance
+          wrk -t4 -c50 -d30s --timeout 30s http://localhost:8768/health
+
+          # Test main application
+          ab -n 1000 -c 10 http://localhost:8080/health
+
+          # Test dashboard
+          ab -n 500 -c 5 http://localhost:8769/health
+
+      - name: Collect performance metrics
+        run: |
+          curl http://localhost:8766/metrics > filewatcher-metrics.txt
+          curl http://localhost:8768/metrics > lsp-metrics.txt
+          curl http://localhost:9090/api/v1/query?query=up > prometheus-metrics.json
+
+      - name: Upload performance reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: performance-reports
+          path: |
+            *-metrics.txt
+            *-metrics.json
+
+  # ======================
+  # Deployment
+  # ======================
+
+  deploy-staging:
+    name: Deploy to Staging
+    runs-on: ubuntu-latest
+    needs: [container-build, performance-tests]
+    if: github.ref == 'refs/heads/develop' || (github.event_name == 'workflow_dispatch' && inputs.deployment_target == 'staging')
+    environment:
+      name: staging
+      url: https://staging.gterminal.dev
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Deploy to staging
+        run: |
+          echo "Deploying to staging environment..."
+          # Add deployment logic here
+
+      - name: Run smoke tests
+        run: |
+          # Basic health checks after deployment
+          curl -f https://staging.gterminal.dev/health
+          curl -f https://staging.gterminal.dev/api/health
+
+  deploy-production:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    needs: [deploy-staging]
+    if: github.ref == 'refs/heads/main' || (github.event_name == 'workflow_dispatch' && inputs.deployment_target == 'production')
+    environment:
+      name: production
+      url: https://gterminal.dev
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Deploy to production
+        run: |
+          echo "Deploying to production environment..."
+          # Add production deployment logic here
+
+      - name: Run production smoke tests
+        run: |
+          curl -f https://gterminal.dev/health
+          curl -f https://gterminal.dev/api/health
+
+  # ======================
+  # Notifications
+  # ======================
+
+  notify-results:
+    name: Notify Results
+    runs-on: ubuntu-latest
+    if: always()
+    needs:
+      [
+        security-scan,
+        rust-build,
+        python-build,
+        integration-tests,
+        container-build,
+      ]
+    steps:
+      - name: Notify on success
+        if: needs.integration-tests.result == 'success'
+        run: |
+          echo "✅ All tests passed! Ready for deployment."
+
+      - name: Notify on failure
+        if: needs.integration-tests.result == 'failure'
+        run: |
+          echo "❌ Tests failed! Check the logs for details."
+          exit 1

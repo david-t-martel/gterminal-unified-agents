@@ -1,0 +1,51 @@
+{
+  "mcpServers": {
+    "gterminal-react": {
+      "command": "uv",
+      "args": ["run", "python", "-m", "mcp.servers.gterminal_react_server"],
+      "env": {
+        "LOG_LEVEL": "INFO",
+        "GOOGLE_CLOUD_PROJECT": "${GOOGLE_CLOUD_PROJECT}",
+        "GOOGLE_CLOUD_LOCATION": "${GOOGLE_CLOUD_LOCATION:-us-central1}",
+        "GOOGLE_GENAI_USE_VERTEXAI": "true",
+        "MCP_HOST": "0.0.0.0",
+        "MCP_PORT": "3000"
+      },
+      "timeout": 60000,
+      "description": "GTerminal ReAct Agent with reasoning and tool execution"
+    },
+    "gterminal-terminal": {
+      "command": "uv",
+      "args": ["run", "python", "-m", "terminal.mcp_server"],
+      "env": {
+        "LOG_LEVEL": "INFO",
+        "MCP_HOST": "0.0.0.0",
+        "MCP_PORT": "3001"
+      },
+      "timeout": 30000,
+      "description": "Terminal execution and file system operations"
+    },
+    "gterminal-auth": {
+      "command": "uv",
+      "args": ["run", "python", "-m", "auth.mcp_server"],
+      "env": {
+        "LOG_LEVEL": "INFO",
+        "MCP_HOST": "0.0.0.0",
+        "MCP_PORT": "3002"
+      },
+      "timeout": 30000,
+      "description": "Authentication and authorization management"
+    },
+    "gterminal-monitoring": {
+      "command": "uv",
+      "args": ["run", "python", "-m", "monitoring.mcp_server"],
+      "env": {
+        "LOG_LEVEL": "INFO",
+        "MCP_HOST": "0.0.0.0",
+        "MCP_PORT": "3003"
+      },
+      "timeout": 30000,
+      "description": "System monitoring and performance metrics"
+    }
+  }
+}
